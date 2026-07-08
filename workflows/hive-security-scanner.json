@@ -1,0 +1,384 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:52.041Z",
+    "id": "jOboCnk65YqILzW4",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Security Scanner",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "security-scanner",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "ss-001-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "security-scanner"
+      },
+      {
+        "parameters": {
+          "rules": {
+            "values": [
+              {
+                "conditions": {
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.body ? $json.body.scope : $json.scope }}",
+                      "rightValue": "architecture",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ],
+                  "combinator": "and"
+                },
+                "renameOutput": true,
+                "outputKey": "Architecture"
+              },
+              {
+                "conditions": {
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.body ? $json.body.scope : $json.scope }}",
+                      "rightValue": "dependencies",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ],
+                  "combinator": "and"
+                },
+                "renameOutput": true,
+                "outputKey": "Dependencies"
+              }
+            ]
+          },
+          "options": {
+            "fallbackOutput": "extra"
+          }
+        },
+        "id": "ss-002-router",
+        "name": "Scope Router",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 3,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const webhookData = $('Webhook Trigger').first().json;\nconst body = webhookData.body || webhookData;\nconst { projectId, scope, architecture, runId } = body;\n\nconst strideCategories = [\n  { id: 'S', name: 'Spoofing', question: 'Can an attacker impersonate a legitimate user or system component?' },\n  { id: 'T', name: 'Tampering', question: 'Can an attacker modify data in transit or at rest without detection?' },\n  { id: 'R', name: 'Repudiation', question: 'Can an attacker deny performing a security-relevant action?' },\n  { id: 'I', name: 'Information Disclosure', question: 'Can an attacker access data they are not authorized to see?' },\n  { id: 'D', name: 'Denial of Service', question: 'Can an attacker disrupt service availability for legitimate users?' },\n  { id: 'E', name: 'Elevation of Privilege', question: 'Can an attacker gain higher privileges than originally granted?' }\n];\n\nconst archComponents = architecture\n  ? (Array.isArray(architecture) ? architecture : [architecture])\n  : ['web-app', 'api', 'database'];\nconst analysisScope = scope || 'full';\n\nconst findings = [];\n\narchComponents.forEach(component => {\n  strideCategories.forEach(cat => {\n    const finding = {\n      id: cat.id + '-' + component + '-' + Date.now(),\n      category: cat.name,\n      categoryId: cat.id,\n      component: component,\n      question: cat.question,\n      scope: analysisScope\n    };\n\n    if (analysisScope === 'architecture' || analysisScope === 'full') {\n      if (component.includes('api') && cat.id === 'S') {\n        finding.architectureRisk = 'high';\n        finding.detail = 'API endpoints require robust authentication to prevent identity spoofing';\n      } else if (component.includes('database') && cat.id === 'I') {\n        finding.architectureRisk = 'high';\n        finding.detail = 'Database access must enforce row-level security and encrypted connections';\n      } else if (component.includes('web') && cat.id === 'T') {\n        finding.architectureRisk = 'medium';\n        finding.detail = 'Client-side data can be tampered with; validate all inputs server-side';\n      } else if (cat.id === 'D') {\n        finding.architectureRisk = 'medium';\n        finding.detail = 'Component needs rate limiting and resource quotas';\n      } else {\n        finding.architectureRisk = 'low';\n        finding.detail = 'Standard security controls apply';\n      }\n    }\n\n    if (analysisScope === 'dependencies' || analysisScope === 'full') {\n      if (cat.id === 'I' || cat.id === 'E') {\n        finding.dependencyRisk = 'medium';\n        finding.depDetail = 'Third-party dependencies may introduce information leaks or privilege escalation vectors';\n      } else {\n        finding.dependencyRisk = 'low';\n        finding.depDetail = 'Low dependency-related risk for this category';\n      }\n    }\n\n    findings.push(finding);\n  });\n});\n\nreturn [{\n  json: {\n    projectId,\n    runId,\n    scope: analysisScope,\n    architecture: archComponents,\n    findings,\n    analyzedAt: new Date().toISOString()\n  }\n}];"
+        },
+        "id": "ss-003-stride",
+        "name": "STRIDE Analysis",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const data = $json;\nconst findings = data.findings || [];\n\nconst severityMap = { high: 3, medium: 2, low: 1 };\n\nconst ratedFindings = findings.map(f => {\n  const archRisk = severityMap[f.architectureRisk] || 0;\n  const depRisk = severityMap[f.dependencyRisk] || 0;\n  const maxRisk = Math.max(archRisk, depRisk);\n\n  let severity = 'low';\n  if (maxRisk >= 3) severity = 'critical';\n  else if (maxRisk >= 2) severity = 'high';\n  else if (maxRisk >= 1) severity = 'medium';\n\n  if (f.categoryId === 'E' && f.component.includes('api')) severity = 'critical';\n  if (f.categoryId === 'I' && f.component.includes('database')) severity = 'critical';\n  if (f.categoryId === 'S' && f.component.includes('api') && severity !== 'critical') severity = 'high';\n\n  return {\n    ...f,\n    severity,\n    riskScore: maxRisk,\n    mitigationRequired: severity === 'critical' || severity === 'high'\n  };\n});\n\nconst criticalCount = ratedFindings.filter(f => f.severity === 'critical').length;\nconst highCount = ratedFindings.filter(f => f.severity === 'high').length;\nconst mediumCount = ratedFindings.filter(f => f.severity === 'medium').length;\n\nlet overallRisk = 'low';\nif (criticalCount > 0) overallRisk = 'critical';\nelse if (highCount > 2) overallRisk = 'high';\nelse if (highCount > 0) overallRisk = 'medium';\n\nreturn [{\n  json: {\n    ...data,\n    findings: ratedFindings,\n    summary: {\n      criticalCount,\n      highCount,\n      mediumCount,\n      totalFindings: ratedFindings.length\n    },\n    overallRisk,\n    hasCritical: criticalCount > 0\n  }\n}];"
+        },
+        "id": "ss-004-rate",
+        "name": "Rate Findings",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Auto-converted from Set v3 (n8n 2.15.x SetV2 node crashes at SetV2.node.ts:352)\nreturn [{ json: {\n  \"projectId\": $json.projectId,\n  \"runId\": $json.runId,\n  \"scope\": $json.scope,\n  \"overallRisk\": $json.overallRisk,\n  \"findings\": JSON.stringify($json.findings),\n  \"summary\": JSON.stringify($json.summary),\n  \"architecture\": JSON.stringify($json.architecture),\n  \"completedAt\": $now.toISO(),\n  \"criticalCount\": $json.summary.criticalCount,\n  \"totalFindings\": $json.summary.totalFindings,\n  \"hasCritical\": $json.hasCritical\n} }];"
+        },
+        "id": "ss-005-compile",
+        "name": "Compile Report",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ workflow: 'security-scanner', projectId: $json.projectId, runId: $json.runId, result: { findings: JSON.parse($json.findings || '[]'), summary: JSON.parse($json.summary || '{}'), overallRisk: $json.overallRisk, scope: $json.scope }, completedAt: $json.completedAt }) }}",
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "ss-006-post",
+        "name": "Post Results",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": ""
+            },
+            "conditions": [
+              {
+                "id": "ss-check-critical-cond",
+                "leftValue": "={{ $('Compile Report').first().json.criticalCount }}",
+                "rightValue": 0,
+                "operator": {
+                  "type": "number",
+                  "operation": "gt"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "ss-007-check-critical",
+        "name": "Check Critical",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1560,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ workflow: 'security-scanner', projectId: $('Compile Report').first().json.projectId, severity: 'critical', message: 'Security scan found ' + $('Compile Report').first().json.criticalCount + ' critical findings in project ' + $('Compile Report').first().json.projectId, overallRisk: $('Compile Report').first().json.overallRisk, findings: JSON.parse($('Compile Report').first().json.findings || '[]').filter(f => f.severity === 'critical'), timestamp: new Date().toISOString() }) }}",
+          "options": {
+            "timeout": 5000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "ss-008-alert",
+        "name": "Critical Alert",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1820,
+          -150
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ success: true, workflow: 'security-scanner', findings: JSON.parse($('Compile Report').first().json.findings || '[]'), overallRisk: $('Compile Report').first().json.overallRisk, summary: JSON.parse($('Compile Report').first().json.summary || '{}'), completedAt: $('Compile Report').first().json.completedAt }) }}",
+          "options": {}
+        },
+        "id": "ss-009-respond",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          2080,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Scope Router",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Scope Router": {
+        "main": [
+          [
+            {
+              "node": "STRIDE Analysis",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "STRIDE Analysis",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "STRIDE Analysis",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "STRIDE Analysis": {
+        "main": [
+          [
+            {
+              "node": "Rate Findings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Rate Findings": {
+        "main": [
+          [
+            {
+              "node": "Compile Report",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Compile Report": {
+        "main": [
+          [
+            {
+              "node": "Post Results",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Post Results": {
+        "main": [
+          [
+            {
+              "node": "Check Critical",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Critical": {
+        "main": [
+          [
+            {
+              "node": "Critical Alert",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Critical Alert": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "c9352e20-24b6-481f-9f71-cd282aaf1eb4",
+    "activeVersionId": "c9352e20-24b6-481f-9f71-cd282aaf1eb4",
+    "versionCounter": 50,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.042Z",
+        "createdAt": "2026-04-07T20:39:52.042Z",
+        "role": "workflow:owner",
+        "workflowId": "jOboCnk65YqILzW4",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

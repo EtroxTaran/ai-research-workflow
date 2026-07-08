@@ -1,0 +1,223 @@
+{
+  "id": "kb-rss-ingest-1",
+  "name": "\ud83d\udcda \u00b7 \u2699\ufe0f KB RSS Ingest (Miniflux)",
+  "active": 1,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24,
+              "triggerAtHour": 8,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 08:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8070/v1/entries?status=unread&limit=100",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "fetch-miniflux",
+      "name": "Fetch Unread Entries",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        470,
+        300
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "miniflux-basic",
+          "name": "Miniflux Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const entries = $input.first().json.entries || [];\nconst items = entries.map(e => ({\n  json: {\n    entry_id: e.id,\n    url: e.url,\n    title: e.title,\n    content: (e.content || '').substring(0, 5000)\n  }\n}));\nreturn items;"
+      },
+      "id": "extract-entries",
+      "name": "Extract Entries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        690,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8001/sql",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "NS",
+              "value": "openclaw"
+            },
+            {
+              "name": "DB",
+              "value": "knowledge"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ 'CREATE article SET url = \"' + $json.url.replace(/\"/g, '\\\\\"') + '\", title = \"' + $json.title.replace(/\"/g, '\\\\\"') + '\", content = \"' + $json.content.replace(/\"/g, '\\\\\"').substring(0, 2000) + '\", content_type = \"miniflux\", ingestion_channel = \"n8n\", ingested_at = time::now(), status = \"ingested\" ;' }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "upsert-surreal",
+      "name": "Upsert to SurrealDB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        910,
+        300
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "surreal-basic",
+          "name": "SurrealDB Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8070/v1/entries",
+        "method": "PUT",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ JSON.stringify({ entry_ids: $items().map(i => i.json.entry_id), status: 'read' }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "mark-read",
+      "name": "Mark as Read",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1130,
+        300
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "miniflux-basic",
+          "name": "Miniflux Basic Auth"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 08:30": {
+      "main": [
+        [
+          {
+            "node": "Fetch Unread Entries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Unread Entries": {
+      "main": [
+        [
+          {
+            "node": "Extract Entries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Entries": {
+      "main": [
+        [
+          {
+            "node": "Upsert to SurrealDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert to SurrealDB": {
+      "main": [
+        [
+          {
+            "node": "Mark as Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "staticData": null,
+  "pinData": null,
+  "versionId": "4ad14300-1e78-4794-a812-ce06c41893ec",
+  "triggerCount": 0,
+  "meta": null,
+  "parentFolderId": null,
+  "createdAt": "2026-03-14 15:05:14.286",
+  "updatedAt": "2026-04-09 16:00:35.533",
+  "isArchived": 0,
+  "versionCounter": 3,
+  "description": null,
+  "activeVersionId": null,
+  "tags": [
+    {
+      "name": "kb"
+    }
+  ]
+}

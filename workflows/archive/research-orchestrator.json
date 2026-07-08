@@ -1,0 +1,624 @@
+{
+  "name": "Research Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "research-start",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "research-start"
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "rawExpression",
+        "values": {
+          "string": [
+            {
+              "name": "query",
+              "value": "={{ $json.body?.query ?? $json.query ?? 'Test query: What is n8n?' }}"
+            },
+            {
+              "name": "domain_hint",
+              "value": "={{ $json.body?.domain_hint ?? $json.domain_hint ?? 'general' }}"
+            },
+            {
+              "name": "language",
+              "value": "={{ $json.body?.language ?? $json.language ?? 'de' }}"
+            },
+            {
+              "name": "mode",
+              "value": "={{ $json.body?.mode ?? $json.mode ?? 'standard' }}"
+            },
+            {
+              "name": "trigger_source",
+              "value": "={{ $json.body?.trigger_source ?? $json.trigger_source ?? 'manual' }}"
+            },
+            {
+              "name": "run_id",
+              "value": "={{ $json.body?.run_id ?? 'run_' + $now.toISO().replace(/[^0-9]/g, '').slice(0, 14) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-params",
+      "name": "Set Parameters & Generate run_id",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        250,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "NS",
+              "value": "research"
+            },
+            {
+              "name": "DB",
+              "value": "workflow"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "=CREATE research_run SET query = '{{ $json.query }}', domain = '{{ $json.domain_hint }}', language = '{{ $json.language }}', status = 'pending', mode = '{{ $json.mode }}', trigger_source = '{{ $json.trigger_source }}', started_at = time::now(), n8n_execution_id = '{{ $execution.id }}', retry_count = 0;",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "surrealdb-create-run",
+      "name": "SurrealDB \u2014 CREATE research_run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        500,
+        100
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "surrealdb-basic-auth",
+          "name": "SurrealDB Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const { execSync } = require(\"child_process\");\nconst query = $input.first().json.body?.query || $input.first().json.query || \"test\";\nconst safeQuery = query.replace(/\"/g, \"\").replace(/\\n/g, \" \").substring(0, 500);\nconst prompt = \"Analyze this research query and return ONLY a JSON object with: sub_questions (array with id, question, search_type), search_terms (object with primary_de, primary_en arrays), sources (array from: kb, web, miniflux), domain_classification (one of: tech, finance, academic, product_comparison, travel, general), mode (one of: quick, standard, deep). Rules: quick=simple facts, standard=comparisons, deep=high stakes. Query: \" + safeQuery;\ntry {\n  const result = execSync(\"gemini -p \\\"\" + prompt.replace(/\"/g, \"\") + \"\\\"\", {\n    encoding: \"utf-8\", timeout: 120000,\n    env: { ...process.env, PATH: \"/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:\" + (process.env.PATH || \"\"), HOME: \"/home/clawd\" },\n    cwd: \"/home/clawd\"\n  });\n  return [{ json: { stdout: result, query: query, exitCode: 0 } }];\n} catch (e) {\n  return [{ json: { stdout: e.stdout || \"\", stderr: e.stderr || e.message, query: query, exitCode: 1 } }];\n}",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "gemini-plan-inline",
+      "name": "Gemini Query Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.stdout || \"\";\nconst query = $input.first().json.query || \"\";\nlet jsonStr = \"\";\nconst mdMatch = raw.match(/```json\\n?([\\s\\S]*?)\\n?```/);\nif (mdMatch) { jsonStr = mdMatch[1]; }\nelse {\n  const lines = raw.split(\"\\n\");\n  let bc = 0, js = -1, je = -1;\n  for (let i = 0; i < lines.length; i++) {\n    const l = lines[i];\n    if (l.startsWith(\"[ERROR]\") || l.startsWith(\"Loaded \") || l.startsWith(\"Server \") || !l.trim()) continue;\n    if (js === -1 && l.trim().startsWith(\"{\")) js = i;\n    if (js >= 0) { for (const c of l) { if (c===\"{\") bc++; if (c===\"}\") bc--; } if (bc===0) { je=i; break; } }\n  }\n  jsonStr = (js>=0 && je>=0) ? lines.slice(js,je+1).join(\"\\n\") : raw;\n}\nlet p;\ntry { p = JSON.parse(jsonStr.trim()); } catch(e) {\n  p = { sub_questions:[{id:\"sq-1\",question:query,search_type:\"web\"}], search_terms:{primary_de:[query],primary_en:[query]}, sources:[\"web\",\"kb\"], domain_classification:\"general\", mode:\"quick\" };\n}\nif (!p.scope) p.scope = {time_range:\"last_year\",languages:[\"de\",\"en\"]};\nif (!p.sources) p.sources = [\"web\",\"kb\"];\nconst vm = [\"quick\",\"standard\",\"deep\"];\nif (!vm.includes(p.mode)) p.mode = \"standard\";\nif (query.match(/\\[deep\\]/i)) p.mode = \"deep\";\nif (query.match(/\\[quick\\]/i)) p.mode = \"quick\";\nreturn [{json:{search_plan:p, mode:p.mode, query:query, language:$input.first().json.body?.language||\"de\"}}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "parse-plan-inline",
+      "name": "Parse Search Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "NS",
+              "value": "research"
+            },
+            {
+              "name": "DB",
+              "value": "workflow"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "=UPDATE research_run SET status = 'phase1', search_plan = {{ JSON.stringify($json.search_plan ?? {}) }}, mode = '{{ $('Set Parameters & Generate run_id').item.json.mode }}' WHERE n8n_execution_id = '{{ $execution.id }}';",
+        "options": {}
+      },
+      "id": "surrealdb-update-plan",
+      "name": "SurrealDB \u2014 UPDATE search_plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1000,
+        100
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "surrealdb-basic-auth",
+          "name": "SurrealDB Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": "={{ $vars.WORKFLOW_ID_PHASE1_GATHER ?? '' }}",
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "search_plan": "={{ $('Phase 0 \u2014 Plan').item.json.search_plan }}",
+            "run_id": "={{ $('Set Parameters & Generate run_id').item.json.run_id }}",
+            "mode": "={{ $('Set Parameters & Generate run_id').item.json.mode }}"
+          }
+        }
+      },
+      "id": "exec-phase1-gather",
+      "name": "Phase 1 \u2014 Gather",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "mode-is-quick",
+              "leftValue": "={{ $('Set Parameters & Generate run_id').item.json.mode }}",
+              "rightValue": "quick",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-mode-check",
+      "name": "IF Mode = quick?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "={{ $vars.WORKFLOW_ID_PHASE4_SYNTHESIZE ?? '' }}",
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "sources": "={{ $('Phase 1 \u2014 Gather').item.json.sources }}",
+            "claims": "={{ $('Phase 1 \u2014 Gather').item.json.claims }}",
+            "search_plan": "={{ $('Phase 0 \u2014 Plan').item.json.search_plan }}",
+            "run_id": "={{ $('Set Parameters & Generate run_id').item.json.run_id }}",
+            "mode": "={{ $('Set Parameters & Generate run_id').item.json.mode }}"
+          }
+        }
+      },
+      "id": "exec-phase4-synthesize",
+      "name": "Phase 4 \u2014 Synthesize",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        1750,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "confidence-check",
+              "leftValue": "={{ $json.confidence_score ?? 0 }}",
+              "rightValue": 0.7,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-confidence-check",
+      "name": "IF Confidence \u2265 Threshold?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "={{ $vars.WORKFLOW_ID_DELIVER ?? '' }}",
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "report": "={{ $('Phase 4 \u2014 Synthesize').item.json.report }}",
+            "run_id": "={{ $('Set Parameters & Generate run_id').item.json.run_id }}",
+            "mode": "={{ $('Set Parameters & Generate run_id').item.json.mode }}",
+            "trigger_source": "={{ $('Set Parameters & Generate run_id').item.json.trigger_source }}"
+          }
+        }
+      },
+      "id": "exec-deliver",
+      "name": "Deliver Report",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        2250,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "NS",
+              "value": "research"
+            },
+            {
+              "name": "DB",
+              "value": "workflow"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "=UPDATE research_run SET status = 'completed', completed_at = time::now() WHERE n8n_execution_id = '{{ $execution.id }}';",
+        "options": {}
+      },
+      "id": "surrealdb-complete",
+      "name": "SurrealDB \u2014 Mark Completed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2500,
+        0
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "surrealdb-basic-auth",
+          "name": "SurrealDB Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "NS",
+              "value": "research"
+            },
+            {
+              "name": "DB",
+              "value": "workflow"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "=UPDATE research_run SET status = 'hitl_pending' WHERE n8n_execution_id = '{{ $execution.id }}';",
+        "options": {}
+      },
+      "id": "surrealdb-hitl",
+      "name": "SurrealDB \u2014 Mark HITL Pending",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2250,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "surrealdb-basic-auth",
+          "name": "SurrealDB Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'completed', run_id: $('Set Parameters & Generate run_id').item.json.run_id, execution_id: $execution.id }) }}",
+        "options": {}
+      },
+      "id": "webhook-response-ok",
+      "name": "Webhook Response \u2014 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2750,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'hitl_pending', run_id: $('Set Parameters & Generate run_id').item.json.run_id, execution_id: $execution.id, reason: 'Confidence below threshold' }) }}",
+        "options": {}
+      },
+      "id": "webhook-response-hitl",
+      "name": "Webhook Response \u2014 HITL",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2500,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Parameters & Generate run_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Parameters & Generate run_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Parameters & Generate run_id": {
+      "main": [
+        [
+          {
+            "node": "SurrealDB \u2014 CREATE research_run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SurrealDB \u2014 CREATE research_run": {
+      "main": [
+        [
+          {
+            "node": "Gemini Query Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SurrealDB \u2014 UPDATE search_plan": {
+      "main": [
+        [
+          {
+            "node": "Phase 1 \u2014 Gather",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Phase 1 \u2014 Gather": {
+      "main": [
+        [
+          {
+            "node": "IF Mode = quick?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Mode = quick?": {
+      "main": [
+        [
+          {
+            "node": "Phase 4 \u2014 Synthesize",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Phase 4 \u2014 Synthesize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Phase 4 \u2014 Synthesize": {
+      "main": [
+        [
+          {
+            "node": "IF Confidence \u2265 Threshold?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Confidence \u2265 Threshold?": {
+      "main": [
+        [
+          {
+            "node": "Deliver Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SurrealDB \u2014 Mark HITL Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deliver Report": {
+      "main": [
+        [
+          {
+            "node": "SurrealDB \u2014 Mark Completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SurrealDB \u2014 Mark Completed": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response \u2014 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SurrealDB \u2014 Mark HITL Pending": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response \u2014 HITL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Query Plan": {
+      "main": [
+        [
+          {
+            "node": "Parse Search Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Search Plan": {
+      "main": [
+        [
+          {
+            "node": "SurrealDB \u2014 UPDATE search_plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 2,
+  "updatedAt": "2026-04-06T00:00:00.000Z",
+  "versionId": "1"
+}

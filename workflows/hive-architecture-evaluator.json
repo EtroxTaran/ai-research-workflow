@@ -1,0 +1,237 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:51.992Z",
+    "id": "0jSgDJmQ2jVevrN5",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Architecture Evaluator",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "architecture-evaluator",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "hive-architecture-evaluator-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "architecture-evaluator"
+      },
+      {
+        "parameters": {
+          "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst projectId = body.projectId || 'unknown';\nconst requirements = body.requirements || [];\nconst techConstraints = body.techConstraints || {};\nconst runId = body.runId || `arch-eval-${Date.now()}`;\n\nif (!requirements || (Array.isArray(requirements) && requirements.length === 0 && typeof requirements !== 'string')) {\n  throw new Error('requirements is required in the request body');\n}\n\nconst reqList = typeof requirements === 'string'\n  ? requirements.split(/[,;\\n]/).map(r => r.trim()).filter(Boolean)\n  : Array.isArray(requirements) ? requirements : [requirements];\n\nconst hasRealtime = reqList.some(r => /real.?time|websocket|live|stream/i.test(r));\nconst hasHighScale = reqList.some(r => /scale|concurrent|throughput|high.?load/i.test(r));\nconst hasOffline = reqList.some(r => /offline|pwa|local.?first/i.test(r));\nconst hasML = reqList.some(r => /machine.?learning|ai|ml|model|inference/i.test(r));\nconst isSimple = reqList.length <= 3 && !hasRealtime && !hasHighScale;\n\nconst preferredLang = techConstraints.language || 'TypeScript';\nconst preferredDb = techConstraints.database || 'PostgreSQL';\nconst deployTarget = techConstraints.deployment || 'self-hosted';\n\nconst options = [\n  {\n    id: 'arch-a',\n    name: 'Monolith (Express/Next.js)',\n    style: 'monolith',\n    description: `Single deployable unit with ${preferredLang}. Express 5 API + Next.js frontend. ${preferredDb} database with Drizzle ORM. Simple deployment, fast iteration.`,\n    stack: {\n      backend: `Express 5 (${preferredLang})`,\n      frontend: 'Next.js 15 + React 19',\n      database: `${preferredDb} + Drizzle ORM`,\n      deployment: deployTarget === 'cloud' ? 'Vercel + managed DB' : 'Docker Compose on single host',\n      messaging: hasRealtime ? 'WebSocket (ws)' : 'REST only'\n    },\n    suitability: {\n      realtime: hasRealtime ? 'partial \u2014 ws addon required' : 'n/a',\n      scale: hasHighScale ? 'limited \u2014 vertical only' : 'sufficient',\n      offline: hasOffline ? 'not supported natively' : 'n/a',\n      ml: hasML ? 'API call to external service' : 'n/a'\n    }\n  },\n  {\n    id: 'arch-b',\n    name: 'Modular Monolith (Domain Modules)',\n    style: 'modular-monolith',\n    description: `Domain-driven modules within a single deployable. Clear boundaries between modules but shared deployment. ${preferredDb} with schema-per-module. Event bus for inter-module communication.`,\n    stack: {\n      backend: `Fastify (${preferredLang}) with module loader`,\n      frontend: 'React 19 SPA + Vite',\n      database: `${preferredDb} with schema isolation per module`,\n      deployment: 'Docker with module health checks',\n      messaging: 'Internal event bus (EventEmitter / BullMQ)'\n    },\n    suitability: {\n      realtime: hasRealtime ? 'good \u2014 SSE/WebSocket per module' : 'n/a',\n      scale: hasHighScale ? 'good \u2014 can extract hot modules later' : 'sufficient',\n      offline: hasOffline ? 'partial \u2014 API-first enables offline cache' : 'n/a',\n      ml: hasML ? 'dedicated ML module with queue' : 'n/a'\n    }\n  },\n  {\n    id: 'arch-c',\n    name: 'Service-Oriented (Micro-ish)',\n    style: 'microservices',\n    description: `Separate services per bounded context. Independent deployments with API gateway. Best for teams > 3 or high-scale requirements. Higher operational complexity.`,\n    stack: {\n      backend: `Multiple ${preferredLang} services + API gateway (Kong/Traefik)`,\n      frontend: 'React 19 micro-frontends or monolithic SPA',\n      database: `${preferredDb} per service (database-per-service pattern)`,\n      deployment: 'Docker Compose / Kubernetes',\n      messaging: 'NATS or RabbitMQ for async, gRPC for sync'\n    },\n    suitability: {\n      realtime: hasRealtime ? 'excellent \u2014 dedicated realtime service' : 'overkill',\n      scale: hasHighScale ? 'excellent \u2014 independent scaling' : 'overkill for current needs',\n      offline: hasOffline ? 'good \u2014 BFF pattern for offline sync' : 'n/a',\n      ml: hasML ? 'excellent \u2014 isolated ML service with GPU' : 'overkill'\n    }\n  }\n];\n\nreturn [{\n  json: {\n    projectId,\n    runId,\n    requirementCount: reqList.length,\n    requirements: reqList,\n    techConstraints: { language: preferredLang, database: preferredDb, deployment: deployTarget },\n    signals: { hasRealtime, hasHighScale, hasOffline, hasML, isSimple },\n    options\n  }\n}];"
+        },
+        "id": "hive-architecture-evaluator-generate",
+        "name": "Generate Options",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $input.first().json;\nconst options = input.options;\nconst signals = input.signals;\n\nconst CRITERIA = [\n  { name: 'time_to_market', weight: 0.25, description: 'How quickly can we ship an MVP?' },\n  { name: 'scalability', weight: 0.20, description: 'Can it grow with demand?' },\n  { name: 'maintainability', weight: 0.20, description: 'How easy is it to evolve and debug?' },\n  { name: 'operational_complexity', weight: 0.15, description: 'How much DevOps overhead?' },\n  { name: 'cost_efficiency', weight: 0.10, description: 'Infrastructure and development cost' },\n  { name: 'team_fit', weight: 0.10, description: 'Does it match team skills and size?' }\n];\n\nconst RAW_SCORES = {\n  'arch-a': {\n    time_to_market: 9,\n    scalability: signals.hasHighScale ? 4 : 7,\n    maintainability: 8,\n    operational_complexity: 9,\n    cost_efficiency: 9,\n    team_fit: 9\n  },\n  'arch-b': {\n    time_to_market: 7,\n    scalability: signals.hasHighScale ? 7 : 8,\n    maintainability: 9,\n    operational_complexity: 7,\n    cost_efficiency: 7,\n    team_fit: 7\n  },\n  'arch-c': {\n    time_to_market: 4,\n    scalability: 9,\n    maintainability: 6,\n    operational_complexity: 3,\n    cost_efficiency: 4,\n    team_fit: 4\n  }\n};\n\nif (signals.hasRealtime) {\n  RAW_SCORES['arch-b'].scalability += 1;\n  RAW_SCORES['arch-c'].scalability += 1;\n}\nif (signals.isSimple) {\n  RAW_SCORES['arch-a'].time_to_market = 10;\n  RAW_SCORES['arch-a'].maintainability = 9;\n}\n\nconst scoredOptions = options.map(opt => {\n  const scores = RAW_SCORES[opt.id] || RAW_SCORES['arch-a'];\n  let weightedTotal = 0;\n\n  const breakdown = CRITERIA.map(c => {\n    const raw = Math.min(10, Math.max(1, scores[c.name] || 5));\n    const weighted = raw * c.weight;\n    weightedTotal += weighted;\n    return {\n      criterion: c.name,\n      weight: c.weight,\n      rawScore: raw,\n      weightedScore: Math.round(weighted * 100) / 100\n    };\n  });\n\n  return {\n    id: opt.id,\n    name: opt.name,\n    style: opt.style,\n    totalScore: Math.round(weightedTotal * 100) / 100,\n    maxPossible: 10,\n    breakdown\n  };\n});\n\nscoredOptions.sort((a, b) => b.totalScore - a.totalScore);\n\nconst winner = scoredOptions[0];\nconst runnerUp = scoredOptions[1];\nconst gap = Math.round((winner.totalScore - runnerUp.totalScore) * 100) / 100;\n\nconst recommendation = {\n  preferred: winner.id,\n  preferredName: winner.name,\n  score: winner.totalScore,\n  confidence: gap > 1.5 ? 'high' : gap > 0.5 ? 'medium' : 'low',\n  rationale: gap > 1.5\n    ? `${winner.name} clearly outperforms alternatives (${gap} point lead).`\n    : gap > 0.5\n    ? `${winner.name} leads by ${gap} points. Consider ${runnerUp.name} if ${runnerUp.breakdown.sort((a,b) => b.rawScore - a.rawScore)[0].criterion} is more important than expected.`\n    : `${winner.name} and ${runnerUp.name} are close (${gap} point gap). Decision should factor in team preference.`,\n  tradeoffs: [\n    `${winner.name}: strongest in ${winner.breakdown.sort((a,b) => b.rawScore - a.rawScore)[0].criterion}`,\n    `${runnerUp.name}: strongest in ${runnerUp.breakdown.sort((a,b) => b.rawScore - a.rawScore)[0].criterion}`,\n    `Weakest area for recommended: ${winner.breakdown.sort((a,b) => a.rawScore - b.rawScore)[0].criterion} (${winner.breakdown.sort((a,b) => a.rawScore - b.rawScore)[0].rawScore}/10)`\n  ]\n};\n\nreturn [{\n  json: {\n    ...input,\n    criteria: CRITERIA,\n    scoredOptions,\n    recommendation\n  }\n}];"
+        },
+        "id": "hive-architecture-evaluator-score",
+        "name": "Score Options",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Auto-converted from Set v3 (n8n 2.15.x SetV2 node crashes at SetV2.node.ts:352)\nreturn [{ json: {\n  \"projectId\": $json.projectId,\n  \"runId\": $json.runId,\n  \"recommendedArchitecture\": $json.recommendation.preferredName,\n  \"confidence\": $json.recommendation.confidence,\n  \"rationale\": $json.recommendation.rationale,\n  \"comparisonMatrix\": JSON.stringify({ criteria: $json.criteria.map(c => c.name), options: $json.scoredOptions.map(o => ({ id: o.id, name: o.name, total: o.totalScore, scores: Object.fromEntries(o.breakdown.map(b => [b.criterion, b.rawScore])) })), recommendation: $json.recommendation }),\n  \"fullOptions\": JSON.stringify($json.options)\n} }];"
+        },
+        "id": "hive-architecture-evaluator-matrix",
+        "name": "Compile Matrix",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "PATCH",
+          "url": "={{ $env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102' }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues/{{ $('Webhook Trigger').first().json.body.ticketId || $json.runId }}",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ status: 'done', result: { architectureEvaluation: { recommended: $json.recommendedArchitecture, confidence: $json.confidence, rationale: $json.rationale, comparisonMatrix: typeof $json.comparisonMatrix === 'string' ? JSON.parse($json.comparisonMatrix) : $json.comparisonMatrix, options: typeof $json.fullOptions === 'string' ? JSON.parse($json.fullOptions) : $json.fullOptions } } }) }}",
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          }
+        },
+        "id": "hive-architecture-evaluator-post",
+        "name": "Post Results",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          1040,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Auto-converted from Set v3 (n8n 2.15.x SetV2 node crashes at SetV2.node.ts:352)\nreturn [{ json: {\n  \"workflow\": \"hive-architecture-evaluator\",\n  \"endpoint\": \"architecture-evaluator\",\n  \"kind\": \"structured_loop\",\n  \"status\": \"completed\",\n  \"receivedAt\": $now.toISO(),\n  \"timeoutMs\": 120000,\n  \"success\": true,\n  \"result\": JSON.stringify({ projectId: $('Compile Matrix').first().json.projectId, runId: $('Compile Matrix').first().json.runId, recommended: $('Compile Matrix').first().json.recommendedArchitecture, confidence: $('Compile Matrix').first().json.confidence, rationale: $('Compile Matrix').first().json.rationale })\n} }];"
+        },
+        "id": "hive-architecture-evaluator-set",
+        "name": "Build Backbone Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ success: $json.success, workflow: $json.workflow, kind: $json.kind, status: $json.status, receivedAt: $json.receivedAt, result: typeof $json.result === 'string' ? JSON.parse($json.result) : $json.result }) }}",
+          "options": {}
+        },
+        "id": "hive-architecture-evaluator-response",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1560,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Generate Options",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate Options": {
+        "main": [
+          [
+            {
+              "node": "Score Options",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Score Options": {
+        "main": [
+          [
+            {
+              "node": "Compile Matrix",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Compile Matrix": {
+        "main": [
+          [
+            {
+              "node": "Post Results",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Post Results": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Backbone Response": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "762772b9-7b0a-410d-8942-29b7d8ed0595",
+    "activeVersionId": "762772b9-7b0a-410d-8942-29b7d8ed0595",
+    "versionCounter": 51,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:51.996Z",
+        "createdAt": "2026-04-07T20:39:51.996Z",
+        "role": "workflow:owner",
+        "workflowId": "0jSgDJmQ2jVevrN5",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

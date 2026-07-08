@@ -1,0 +1,1821 @@
+{
+  "name": "🔬 · 🤖 Research Pipeline MVP",
+  "tags": [
+    {
+      "name": "research"
+    },
+    {
+      "name": "ai-llm"
+    }
+  ],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "research-start",
+      "parameters": {
+        "path": "research-start",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        550
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "set-parameters",
+      "name": "Set Parameters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        250,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first().json;\nconst body = input.body || {};\n\nreturn [{ json: {\n  query: body.query || input.query || 'test query',\n  language: body.language || input.language || 'de',\n  mode: body.mode || input.mode || 'standard',\n  trigger_source: body.trigger_source || input.trigger_source || 'webhook',\n  domain_hint: body.domain_hint || input.domain_hint || 'general',\n  callback_webhook: body.callback_webhook || input.callback_webhook || '',\n  user_id: body.user_id || input.user_id || '',\n  run_id: body.run_id || input.run_id || ('run_' + Date.now()),\n  cost: { total_tokens: 0, estimated_usd: 0, by_phase: {} }\n} }];"
+      }
+    },
+    {
+      "id": "surrealdb-create-run",
+      "name": "SurrealDB CREATE research_run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        750,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:18000/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "surreal-ns",
+              "value": "research"
+            },
+            {
+              "name": "surreal-db",
+              "value": "workflow"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "={{ \"CREATE research_run SET run_id=\" + JSON.stringify($json.run_id) + \", query=\" + JSON.stringify($json.query) + \", language=\" + JSON.stringify($json.language) + \", mode=\" + JSON.stringify($json.mode) + \", domain='general', trigger_source=\" + JSON.stringify($json.trigger_source) + \", status='pending', started_at=time::now()\" + ($json.user_id ? \", user_id=\" + JSON.stringify($json.user_id) : \"\") + \";\" }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ICgLzc5AfiFid0By",
+          "name": "surrealdb-basic-auth"
+        }
+      }
+    },
+    {
+      "id": "p0-gemini-query-plan",
+      "name": "P0: Gemini Query Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst cliEnv = {\n  HOME: '/home/clawd',\n  PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin',\n  GEMINI_API_KEY: $env.GEMINI_API_KEY || $env.GOOGLE_GEMINI_API_KEY || ''\n};\n\nconst params = $('Set Parameters').first().json;\nconst query = params.query;\nconst language = params.language || 'de';\nconst mode = params.mode || 'standard';\n\nconst prompt = `Du bist ein Research-Planer. Zerlege diese Query in Suchbegriffe.\\n\\nQuery: \\\"${query}\\\"\\nSprache: ${language}\\nModus: ${mode}\\n\\nAntworte NUR mit validem JSON in diesem Format:\\n{\\n  \\\"original_query\\\": \\\"...\\\",\\n  \\\"sub_queries\\\": [\\\"search term 1\\\", \\\"search term 2\\\", \\\"search term 3\\\"],\\n  \\\"search_terms\\\": { \\\"primary_de\\\": \\\"...\\\", \\\"primary_en\\\": \\\"...\\\", \\\"counter_de\\\": \\\"...\\\", \\\"counter_en\\\": \\\"...\\\" },\\n  \\\"domain\\\": \\\"tech|finance|academic|product_comparison|travel|general (choose best match for query)\\\",\\n  \\\"expected_source_types\\\": [\\\"web\\\", \\\"academic\\\", \\\"news\\\"],\\n  \\\"language\\\": \\\"${language}\\\"\\n}\\n\\nKein Markdown, kein Kommentar, NUR JSON.`;\n\nlet stdout = '';\nlet stderr = '';\nlet exitCode = 0;\nconst maxRetries = 2;\n\nfor (let attempt = 0; attempt <= maxRetries; attempt++) {\n  try {\n    stdout = execSync(`gemini -m gemini-2.5-flash -p \"${prompt.replace(/\"/g, '\\\\\\\"')}\"`, {\n      encoding: 'utf-8',\n      timeout: 120000,\n      env: cliEnv\n    });\n    if (stdout.trim().length > 0) break;\n  } catch (err) {\n    stdout = err.stdout || '';\n    stderr = err.stderr || '';\n    exitCode = err.status || 1;\n    if (stdout.trim().length > 0) break;\n  }\n  if (attempt < maxRetries) {\n    execSync('sleep 2', { timeout: 5000 });\n  }\n}\n\nreturn [{ json: { stdout: stdout.trim(), stderr: stderr.trim(), query, exitCode } }];"
+      }
+    },
+    {
+      "id": "p0-parse-search-plan",
+      "name": "P0: Parse Search Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const geminiOutput = $input.first().json;\nconst params = $('Set Parameters').first().json;\n\nlet searchPlan;\n\ntry {\n  let raw = geminiOutput.stdout || '';\n  raw = raw.split('\\n').filter(line => !line.match(/^(WARNING|ERROR|\\[|Traceback)/i)).join('\\n');\n  const jsonMatch = raw.match(/```(?:json)?\\s*([\\s\\S]*?)```/);\n  if (jsonMatch) raw = jsonMatch[1];\n  const braceMatch = raw.match(/\\{[\\s\\S]*\\}/);\n  if (braceMatch) {\n    searchPlan = JSON.parse(braceMatch[0]);\n  } else {\n    throw new Error('Kein JSON gefunden');\n  }\n} catch (err) {\n  searchPlan = {\n    original_query: params.query,\n    sub_queries: [params.query],\n    search_terms: { primary_de: params.query, primary_en: params.query },\n    domain: 'general',\n    expected_source_types: ['web'],\n    language: params.language\n  };\n}\n\nif (!searchPlan.sub_queries || searchPlan.sub_queries.length === 0) {\n  searchPlan.sub_queries = [params.query];\n}\nif (!searchPlan.search_terms) {\n  searchPlan.search_terms = { primary_de: params.query, primary_en: params.query };\n}\n\nreturn [{ json: { search_plan: searchPlan, mode: params.mode, query: params.query, language: params.language } }];"
+      }
+    },
+    {
+      "id": "surrealdb-update-search-plan",
+      "name": "SurrealDB UPDATE search_plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1500,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:18000/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "surreal-ns",
+              "value": "research"
+            },
+            {
+              "name": "surreal-db",
+              "value": "workflow"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "={{ \"UPDATE research_run SET search_plan=\" + JSON.stringify(JSON.stringify($json.search_plan)) + \", mode=\" + JSON.stringify($json.mode) + \", domain='general', status='phase1' WHERE run_id=\" + JSON.stringify($(\"Set Parameters\").first().json.run_id) + \";\" }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ICgLzc5AfiFid0By",
+          "name": "surrealdb-basic-auth"
+        }
+      }
+    },
+    {
+      "id": "p1-kb-search",
+      "name": "P1: KB Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\nconst params = $('Set Parameters').first().json;\nconst query = params.query;\nconst mode = params.mode || 'standard';\n\nif (mode === 'quick') return [{ json: { sources: [] } }];\n\nconst cliEnv = {\n  HOME: '/home/clawd',\n  PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin',\n  PYTHONPATH: ''\n};\n\nlet sources = [];\ntry {\n  const result = execSync(`python3 /home/clawd/.openclaw/workspace/scripts/kb-search.py \"${query.replace(/\"/g, '\\\\\"')}\"`, {\n    encoding: 'utf-8',\n    timeout: 30000,\n    env: cliEnv\n  });\n\n  const entryPattern = /\\[(\\d+)\\]\\s+score=([\\d.]+)\\s+\\([^)]+\\)\\s+\\|\\s+(.+)/g;\n  let match;\n  const entries = [];\n  while ((match = entryPattern.exec(result)) !== null) {\n    entries.push({ score: parseFloat(match[2]), title: match[3].trim(), startPos: match.index });\n  }\n  for (let i = 0; i < entries.length; i++) {\n    const entry = entries[i];\n    const endPos = i + 1 < entries.length ? entries[i + 1].startPos : result.length;\n    const block = result.substring(entry.startPos, endPos);\n    const urlMatch = block.match(/URL:\\s*(.+)/i);\n    const snippetMatch = block.match(/Snippet:\\s*(.+)/i);\n    sources.push({\n      url: urlMatch ? urlMatch[1].trim() : '',\n      title: entry.title,\n      snippet: snippetMatch ? snippetMatch[1].trim() : '',\n      score: entry.score,\n      source_type: 'kb',\n      tier: 'T2'\n    });\n  }\n} catch (err) {\n  sources = [];\n}\n\nreturn [{ json: { sources } }];"
+      }
+    },
+    {
+      "id": "p1-web-search",
+      "name": "P1: Web Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst params = $('Set Parameters').first().json;\nconst plan = $('P0: Parse Search Plan').first().json.search_plan || {};\nconst query = params.query;\n\nconst searchTerms = [];\nsearchTerms.push(query);\nif (plan.search_terms) {\n  if (plan.search_terms.primary_de && plan.search_terms.primary_de !== query) searchTerms.push(plan.search_terms.primary_de);\n  if (plan.search_terms.primary_en && plan.search_terms.primary_en !== query) searchTerms.push(plan.search_terms.primary_en);\n}\nif (plan.sub_queries) {\n  for (const sq of plan.sub_queries.slice(0, 2)) {\n    if (typeof sq === 'string' && sq !== query) searchTerms.push(sq);\n  }\n}\n\nlet allSources = [];\nconst seenUrls = new Set();\n\nfor (const term of searchTerms.slice(0, 3)) {\n  const encodedQuery = encodeURIComponent(term);\n  try {\n    const braveKey = $env.BRAVE_SEARCH_API_KEY || $env.BRAVE_API_KEY || '';\n    if (braveKey) {\n      const braveResult = execSync(`curl -s -H \"X-Subscription-Token: ${braveKey}\" \"https://api.search.brave.com/res/v1/web/search?q=${encodedQuery}&count=10\"`, {\n        encoding: 'utf-8', timeout: 15000\n      });\n      const braveData = JSON.parse(braveResult);\n      if (braveData.web && braveData.web.results) {\n        for (const r of braveData.web.results) {\n          if (!seenUrls.has(r.url)) {\n            seenUrls.add(r.url);\n            allSources.push({ url: r.url, title: r.title || '', snippet: r.description || '', score: 0.7, source_type: 'web', origin: 'brave', tier: 'T3' });\n          }\n        }\n      }\n    }\n  } catch (err) {}\n\n  try {\n    const tavilyKey = $env.TAVILY_API_KEY || '';\n    if (tavilyKey) {\n      const tavilyBody = JSON.stringify({ api_key: tavilyKey, query: term, max_results: 10, include_answer: false });\n      const tavilyResult = execSync(`curl -s -X POST -H \"Content-Type: application/json\" -d '${tavilyBody.replace(/'/g, \"'\\\\''\")}'  \"https://api.tavily.com/search\"`, {\n        encoding: 'utf-8', timeout: 15000\n      });\n      const tavilyData = JSON.parse(tavilyResult);\n      if (tavilyData.results) {\n        for (const r of tavilyData.results) {\n          if (!seenUrls.has(r.url)) {\n            seenUrls.add(r.url);\n            allSources.push({ url: r.url, title: r.title || '', snippet: r.content || '', score: r.score || 0.6, source_type: 'web', origin: 'tavily', tier: 'T3' });\n          }\n        }\n      }\n    }\n  } catch (err) {}\n\n  if (allSources.length >= 15) break;\n}\n\nreturn [{ json: { sources: allSources } }];"
+      }
+    },
+    {
+      "id": "p1-miniflux-rss",
+      "name": "P1: MiniFlux RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        500
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\nconst params = $('Set Parameters').first().json;\nconst query = params.query;\n\nif (params.mode === 'quick') return [{ json: { sources: [] } }];\n\n\nconst minifluxUrl = $env.MINIFLUX_URL || 'http://localhost:8070';\nconst minifluxApiKey = $env.MINIFLUX_API_KEY || '';\n\nif (!minifluxApiKey) return [{ json: { sources: [] } }];\n\nconst keywords = query.replace(/[^a-zA-Z\\u00e4\\u00f6\\u00fc\\u00c4\\u00d6\\u00dc\\u00df0-9\\s]/g, '').split(/\\s+/).filter(w => w.length > 3);\nconst searchTerms = [query];\nif (keywords.length >= 2) searchTerms.push(...keywords.slice(0, 3));\n\nlet sources = [];\nconst seenUrls = new Set();\n\nfor (const term of searchTerms) {\n  try {\n    const encodedTerm = encodeURIComponent(term);\n    const result = execSync(`curl -s -H \"X-Auth-Token: ${minifluxApiKey}\" \"${minifluxUrl}/v1/entries?search=${encodedTerm}&limit=10&order=published_at&direction=desc\"`, {\n      encoding: 'utf-8', timeout: 15000\n    });\n    const data = JSON.parse(result);\n    if (data.entries && Array.isArray(data.entries)) {\n      for (const entry of data.entries) {\n        if (seenUrls.has(entry.url)) continue;\n        seenUrls.add(entry.url);\n        let snippet = (entry.content || '').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim().substring(0, 500);\n        sources.push({ url: entry.url || '', title: entry.title || '', snippet, source_type: 'rss', origin: 'miniflux', tier: 'T2' });\n      }\n    }\n  } catch (err) {}\n  if (sources.length >= 10) break;\n}\n\nif (sources.length === 0) {\n  try {\n    const result = execSync(`curl -s -H \"X-Auth-Token: ${minifluxApiKey}\" \"${minifluxUrl}/v1/entries?limit=20&order=published_at&direction=desc&status=unread\"`, {\n      encoding: 'utf-8', timeout: 15000\n    });\n    const data = JSON.parse(result);\n    if (data.entries && Array.isArray(data.entries)) {\n      for (const entry of data.entries.slice(0, 5)) {\n        let snippet = (entry.content || '').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim().substring(0, 500);\n        sources.push({ url: entry.url || '', title: entry.title || '', snippet, source_type: 'rss', origin: 'miniflux_recent', tier: 'T3' });\n      }\n    }\n  } catch (err) {}\n}\n\nreturn [{ json: { sources } }];"
+      }
+    },
+    {
+      "id": "p1-gemini-deep",
+      "name": "P1: Gemini Deep Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        700
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\nconst fs = require('fs');\n\nconst params = $('Set Parameters').first().json;\nconst plan = $('P0: Parse Search Plan').first().json.search_plan || {};\nconst query = params.query;\nconst language = params.language || 'de';\n\nif (params.mode === 'quick') return [{ json: { sources: [] } }];\n\n\nconst cliEnv = {\n  HOME: '/home/clawd',\n  PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin',\n  GEMINI_API_KEY: $env.GEMINI_API_KEY || $env.GOOGLE_GEMINI_API_KEY || ''\n};\n\nconst subQueries = (plan.sub_queries || []).filter(sq => typeof sq === 'string').slice(0, 3);\nconst searchContext = subQueries.length > 0 ? `\\nSub-Fragen: ${subQueries.join(', ')}` : '';\n\nconst prompt = `Recherchiere gruendlich zu: \\\"${query}\\\"${searchContext}\\nSprache: ${language}\\n\\nFinde aktuelle Informationen. Fuer jede Quelle:\\nSOURCE: [Titel]\\nURL: [URL]\\nFINDING: [Kernaussage]\\n---`;\n\nconst tmpFile = '/tmp/gemini_deep_' + Date.now() + '.txt';\nfs.writeFileSync(tmpFile, prompt);\n\nlet sources = [];\ntry {\n  const result = execSync(`cat \"${tmpFile}\" | gemini -m gemini-2.5-pro -p \"Process the above research request. For each source found, output in this exact format: SOURCE: [Title]\\\\nURL: [URL]\\\\nFINDING: [Key finding]\\\\n---\"`, {\n    encoding: 'utf-8', timeout: 240000, env: cliEnv, maxBuffer: 5 * 1024 * 1024\n  });\n\n  const blocks = result.split(/---+/);\n  for (const block of blocks) {\n    const titleMatch = block.match(/SOURCE:\\s*(.+)/i);\n    const urlMatch = block.match(/URL:\\s*(https?:\\/\\/\\S+)/i);\n    const findingMatch = block.match(/FINDING:\\s*(.+)/i);\n    if (urlMatch) {\n      sources.push({\n        title: titleMatch ? titleMatch[1].trim() : 'Gemini Result',\n        url: urlMatch[1].trim(),\n        snippet: findingMatch ? findingMatch[1].trim() : '',\n        score: 0.65, source_type: 'deep_search', origin: 'gemini', tier: 'T2'\n      });\n    }\n  }\n\n  if (sources.filter(s => s.url).length === 0 && result.length > 50) {\n    const urlRegex = /https?:\\/\\/[^\\s)\\]>\"',]+/g;\n    const seenUrls = new Set();\n    let match;\n    while ((match = urlRegex.exec(result)) !== null) {\n      let url = match[0].replace(/[.,;:!?)]+$/, '').replace(/\\)+$/, '');\n      if (seenUrls.has(url)) continue;\n      seenUrls.add(url);\n      const urlPos = result.indexOf(url);\n      const before = result.substring(Math.max(0, urlPos - 300), urlPos);\n      const titleLines = before.split(/\\n/).filter(l => l.trim().length > 5);\n      let title = titleLines.length > 0 ? titleLines[titleLines.length - 1].trim().replace(/^[\\*\\-\\d.]+\\s*/, '').replace(/\\*+/g, '').trim() : 'Gemini Result';\n      if (title.length > 120) title = title.substring(0, 120);\n      sources.push({ title, url, snippet: '', score: 0.55, source_type: 'deep_search', origin: 'gemini_freetext', tier: 'T2' });\n    }\n  }\n} catch (err) {\n  sources.push({ title: 'ERROR: Gemini Deep Search', url: '', snippet: err.message || String(err), score: 0, source_type: 'error', origin: 'gemini_error', tier: 'T3' });\n}\n\ntry { fs.unlinkSync(tmpFile); } catch(e) {}\nreturn [{ json: { sources } }];"
+      }
+    },
+    {
+      "id": "p1-academic-search",
+      "name": "P1: Academic Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        900
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\nconst params = $('Set Parameters').first().json;\nconst plan = $('P0: Parse Search Plan').first().json.search_plan || {};\nconst query = params.query;\nconst mode = params.mode || 'standard';\n\nif (mode === 'quick') return [{ json: { sources: [] } }];\n\nconst searchTerm = (plan.search_terms && plan.search_terms.primary_en) || query;\nconst encodedQuery = encodeURIComponent(searchTerm);\n\nlet sources = [];\nconst seenTitles = new Set();\n\ntry {\n  const ssResult = execSync(`curl -s \"https://api.semanticscholar.org/graph/v1/paper/search?query=${encodedQuery}&limit=15&fields=title,abstract,url,citationCount,year,authors\"`, {\n    encoding: 'utf-8', timeout: 20000\n  });\n  const ssData = JSON.parse(ssResult);\n  if (ssData.data) {\n    for (const paper of ssData.data) {\n      if (!paper.title || seenTitles.has(paper.title.toLowerCase())) continue;\n      seenTitles.add(paper.title.toLowerCase());\n      const authorStr = (paper.authors || []).slice(0, 3).map(a => a.name).join(', ');\n      const citations = paper.citationCount || 0;\n      let score = 0.6;\n      if (citations > 100) score = 0.9;\n      else if (citations > 20) score = 0.8;\n      else if (citations > 5) score = 0.7;\n      sources.push({\n        url: paper.url || `https://api.semanticscholar.org/paper/${paper.paperId}`,\n        title: paper.title,\n        snippet: (paper.abstract || '').substring(0, 500),\n        score,\n        source_type: 'academic',\n        origin: 'semantic_scholar',\n        tier: citations > 20 ? 'T1' : 'T2',\n        metadata: { authors: authorStr, year: paper.year, citations }\n      });\n    }\n  }\n} catch (err) {}\n\ntry {\n  const arxivQuery = encodeURIComponent(searchTerm.replace(/[^a-zA-Z0-9\\s]/g, ''));\n  const arxivResult = execSync(`curl -s \"http://export.arxiv.org/api/query?search_query=all:${arxivQuery}&max_results=10&sortBy=relevance\"`, {\n    encoding: 'utf-8', timeout: 20000\n  });\n  const entries = arxivResult.split('<entry>');\n  for (const entry of entries.slice(1)) {\n    const titleMatch = entry.match(/<title>([^<]+)<\\/title>/);\n    const summaryMatch = entry.match(/<summary>([^<]+)<\\/summary>/);\n    const idMatch = entry.match(/<id>([^<]+)<\\/id>/);\n    const publishedMatch = entry.match(/<published>([^<]+)<\\/published>/);\n    if (titleMatch && idMatch) {\n      const title = titleMatch[1].trim().replace(/\\s+/g, ' ');\n      if (seenTitles.has(title.toLowerCase())) continue;\n      seenTitles.add(title.toLowerCase());\n      sources.push({\n        url: idMatch[1].trim(),\n        title,\n        snippet: (summaryMatch ? summaryMatch[1].trim().replace(/\\s+/g, ' ') : '').substring(0, 500),\n        score: 0.65,\n        source_type: 'academic',\n        origin: 'arxiv',\n        tier: 'T2',\n        metadata: { published: publishedMatch ? publishedMatch[1].trim() : '' }\n      });\n    }\n  }\n} catch (err) {}\n\nreturn [{ json: { sources } }];"
+      }
+    },
+    {
+      "id": "p1-social-search",
+      "name": "P1: Social Search (Grok)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        1100
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\nconst params = $('Set Parameters').first().json;\nconst query = params.query;\nconst mode = params.mode || 'standard';\n\nif (mode === 'quick') return [{ json: { sources: [] } }];\n\n\nconst xaiKey = $env.XAI_API_KEY || $env.GROK_API_KEY || '';\nif (!xaiKey) return [{ json: { sources: [] } }];\n\nlet sources = [];\n\ntry {\n  const body = JSON.stringify({\n    model: 'grok-4',\n    messages: [{\n      role: 'system',\n      content: 'Search X/Twitter for recent discussions, opinions, and trends. Return structured results with post URLs, author handles, content summaries, and sentiment.'\n    }, {\n      role: 'user',\n      content: `Find recent X/Twitter discussions about: ${query}. For each relevant post, provide: AUTHOR: @handle, CONTENT: summary, SENTIMENT: positive/negative/neutral, URL: link. Separate entries with ---`\n    }],\n    search_parameters: { mode: 'auto' }\n  });\n\n  const result = execSync(`curl -s -X POST -H \"Content-Type: application/json\" -H \"Authorization: Bearer ${xaiKey}\" -d '${body.replace(/'/g, \"'\\\\''\")}'  \"https://api.x.ai/v1/chat/completions\"`, {\n    encoding: 'utf-8', timeout: 30000\n  });\n\n  const data = JSON.parse(result);\n  const content = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';\n\n  const blocks = content.split(/---+/);\n  for (const block of blocks) {\n    const authorMatch = block.match(/AUTHOR:\\s*@?(\\w+)/i);\n    const contentMatch = block.match(/CONTENT:\\s*(.+)/i);\n    const sentimentMatch = block.match(/SENTIMENT:\\s*(\\w+)/i);\n    const urlMatch = block.match(/URL:\\s*(https?:\\/\\/\\S+)/i);\n    if (contentMatch) {\n      sources.push({\n        url: urlMatch ? urlMatch[1].trim() : (authorMatch ? `https://x.com/${authorMatch[1]}` : ''),\n        title: authorMatch ? `@${authorMatch[1]} on X` : 'X/Twitter Discussion',\n        snippet: contentMatch[1].trim().substring(0, 500),\n        score: 0.5,\n        source_type: 'social',\n        origin: 'grok_x',\n        tier: 'T3',\n        metadata: { sentiment: sentimentMatch ? sentimentMatch[1].toLowerCase() : 'neutral' }\n      });\n    }\n  }\n\n  if (sources.length === 0 && content.length > 50) {\n    sources.push({\n      url: '',\n      title: 'X/Twitter Discussion Summary',\n      snippet: content.substring(0, 500),\n      score: 0.4,\n      source_type: 'social',\n      origin: 'grok_x_summary',\n      tier: 'T3'\n    });\n  }\n} catch (err) {}\n\nreturn [{ json: { sources } }];"
+      }
+    },
+    {
+      "id": "p1-youcom-research",
+      "name": "P1: You.com Deep Research",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        1300
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\nconst params = $('Set Parameters').first().json;\nconst query = params.query;\nconst mode = params.mode || 'standard';\n\nif (mode !== 'deep') return [{ json: { sources: [] } }];\n\n\nconst youcomKey = $env.YOUCOM_API_KEY || '';\nif (!youcomKey) return [{ json: { sources: [] } }];\n\nlet sources = [];\n\ntry {\n  const encodedQuery = encodeURIComponent(query);\n  const result = execSync(`curl -s -H \"X-API-Key: ${youcomKey}\" \"https://api.ydc-index.io/research?query=${encodedQuery}\"`, {\n    encoding: 'utf-8', timeout: 60000\n  });\n\n  const data = JSON.parse(result);\n  if (data.answer) {\n    sources.push({\n      url: '', title: 'You.com Research Summary', snippet: data.answer.substring(0, 1000),\n      score: 0.7, source_type: 'deep_search', origin: 'youcom', tier: 'T2'\n    });\n  }\n  if (data.citations) {\n    for (const cite of data.citations) {\n      sources.push({\n        url: cite.url || '', title: cite.title || 'You.com Citation',\n        snippet: (cite.snippet || cite.content || '').substring(0, 500),\n        score: 0.65, source_type: 'deep_search', origin: 'youcom', tier: 'T2'\n      });\n    }\n  }\n} catch (err) {}\n\nreturn [{ json: { sources } }];"
+      }
+    },
+    {
+      "id": "p1-exa-search",
+      "name": "P1: Exa Neural Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        1500
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\nconst params = $('Set Parameters').first().json;\nconst query = params.query;\nconst mode = params.mode || 'standard';\n\nif (mode !== 'deep') return [{ json: { sources: [] } }];\n\n\nconst exaKey = $env.EXA_API_KEY || '';\nif (!exaKey) return [{ json: { sources: [] } }];\n\nlet sources = [];\n\ntry {\n  const body = JSON.stringify({ query, num_results: 10, use_autoprompt: true, type: 'neural' });\n  const result = execSync(`curl -s -X POST -H \"Content-Type: application/json\" -H \"x-api-key: ${exaKey}\" -d '${body.replace(/'/g, \"'\\\\''\")}'  \"https://api.exa.ai/search\"`, {\n    encoding: 'utf-8', timeout: 20000\n  });\n  const data = JSON.parse(result);\n  if (data.results) {\n    for (const r of data.results) {\n      sources.push({\n        url: r.url || '', title: r.title || 'Exa Result',\n        snippet: (r.text || r.highlights?.[0] || '').substring(0, 500),\n        score: r.score || 0.6, source_type: 'deep_search', origin: 'exa', tier: 'T2'\n      });\n    }\n  }\n} catch (err) {}\n\nreturn [{ json: { sources } }];"
+      }
+    },
+    {
+      "id": "p1-merge-all",
+      "name": "P1: Merge All Branches",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        2050,
+        600
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 8
+      }
+    },
+    {
+      "id": "p1-dedup-sources",
+      "name": "P1: Deduplicate Sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2300,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all();\n\nlet allSources = [];\nfor (const item of items) {\n  if (item.json.sources && Array.isArray(item.json.sources)) {\n    allSources = allSources.concat(item.json.sources);\n  }\n}\n\nconst seen = new Map();\nconst unique = [];\n\nfor (const src of allSources) {\n  const url = (src.url || '').toLowerCase().replace(/\\/+$/, '');\n  if (!url || url === '') {\n    unique.push(src);\n    continue;\n  }\n  if (seen.has(url)) {\n    const existing = seen.get(url);\n    existing.score = Math.min(1.0, (existing.score || 0.5) + 0.15);\n    existing.cross_referenced = true;\n    if (existing.tier === 'T3') existing.tier = 'T2';\n  } else {\n    seen.set(url, src);\n    unique.push(src);\n  }\n}\n\nfor (const src of unique) {\n  if (!src.tier) {\n    if (src.source_type === 'kb' || src.source_type === 'academic') src.tier = 'T2';\n    else if (src.source_type === 'rss') src.tier = 'T2';\n    else src.tier = 'T3';\n  }\n}\n\nunique.sort((a, b) => (b.score || 0) - (a.score || 0));\n\nconst platforms = new Set(unique.map(s => s.origin || s.source_type));\n\nconst stats = {\n  total_raw: allSources.length,\n  total_sources: unique.length,\n  unique_platforms: platforms.size,\n  by_type: {\n    kb: unique.filter(s => s.source_type === 'kb').length,\n    web: unique.filter(s => s.source_type === 'web').length,\n    rss: unique.filter(s => s.source_type === 'rss').length,\n    deep_search: unique.filter(s => s.source_type === 'deep_search').length,\n    academic: unique.filter(s => s.source_type === 'academic').length,\n    social: unique.filter(s => s.source_type === 'social').length\n  },\n  by_tier: {\n    T1: unique.filter(s => s.tier === 'T1').length,\n    T2: unique.filter(s => s.tier === 'T2').length,\n    T3: unique.filter(s => s.tier === 'T3').length\n  }\n};\n\nreturn [{ json: { sources: unique, stats } }];"
+      }
+    },
+    {
+      "id": "p1-extract-claims",
+      "name": "P1: Extract Claims",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2550,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const data = $input.first().json;\nconst sources = data.sources || [];\nconst stats = data.stats || {};\n\nconst claims = [];\nconst seenClaims = new Set();\n\nfor (const src of sources) {\n  const snippet = src.snippet || '';\n  const sentences = snippet.split(/[.!?]+/).filter(s => s.trim().length > 20);\n  for (const sentence of sentences.slice(0, 3)) {\n    const claim = sentence.trim();\n    const claimKey = claim.toLowerCase().substring(0, 60);\n    if (!seenClaims.has(claimKey)) {\n      seenClaims.add(claimKey);\n      claims.push({\n        text: claim,\n        source_url: src.url,\n        source_title: src.title,\n        confidence: src.score || 0.5,\n        tier: src.tier || 'T3'\n      });\n    }\n  }\n}\n\nconst topClaims = claims.slice(0, 50);\n\nreturn [{ json: { sources, claims: topClaims, stats: { ...stats, total_claims: topClaims.length } } }];"
+      }
+    },
+    {
+      "id": "gate1-check",
+      "name": "Gate 1: Source Sufficiency",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2750,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const data = $input.first().json;\nconst mode = $('Set Parameters').first().json.mode || 'standard';\nconst stats = data.stats || {};\nconst sources = data.sources || [];\n\nconst platforms = new Set(sources.map(s => s.origin || s.source_type));\nconst t1t2 = sources.filter(s => s.tier === 'T1' || s.tier === 'T2').length;\n\nlet gate1 = { mode, total: stats.total_sources || sources.length, platforms: platforms.size, t1t2, passed: true, issues: [] };\n\nif (mode === 'quick') {\n  gate1.gate_logic = 'quick: no gate';\n} else if (mode === 'standard') {\n  if (gate1.total < 8) { gate1.issues.push(`Only ${gate1.total} sources (need >=8)`); gate1.passed = false; }\n  if (gate1.platforms < 2) { gate1.issues.push(`Only ${gate1.platforms} platforms (need >=2)`); gate1.passed = false; }\n  gate1.gate_logic = 'standard: >=8 sources, >=2 platforms';\n} else if (mode === 'deep') {\n  if (gate1.total < 12) { gate1.issues.push(`Only ${gate1.total} sources (need >=12)`); gate1.passed = false; }\n  if (gate1.platforms < 3) { gate1.issues.push(`Only ${gate1.platforms} platforms (need >=3)`); gate1.passed = false; }\n  if (t1t2 < 5) { gate1.issues.push(`Only ${t1t2} T1/T2 sources (need >=5)`); gate1.passed = false; }\n  gate1.gate_logic = 'deep: >=12 sources, >=3 platforms, >=5 T1/T2';\n}\n\nreturn [{ json: { ...data, gate1 } }];"
+      }
+    },
+    {
+      "id": "p2-if-deep",
+      "name": "P2: IF Mode = deep?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2950,
+        600
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-p2-deep",
+              "leftValue": "={{ $('Set Parameters').first().json.mode }}",
+              "rightValue": "deep",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "p2-devils-advocate",
+      "name": "P2: Devil's Advocate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        450
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\nconst fs = require('fs');\n\nconst claimsData = $('P1: Extract Claims').first().json;\nconst params = $('Set Parameters').first().json;\nconst claims = (claimsData.claims || []).slice(0, 10);\n\nif (claims.length === 0) {\n  return [{ json: { counter_research: [], pre_mortem: '', claims: claimsData.claims, sources: claimsData.sources, stats: claimsData.stats } }];\n}\n\nconst claimsList = claims.map((c, i) => `${i + 1}. [${c.tier}] ${c.text} (Source: ${c.source_title || c.source_url})`).join('\\n');\n\nconst prompt = `Du bist ein Devil's Advocate Analyst. Hinterfrage diese Claims kritisch.\\n\\nFuer JEDEN Claim:\\n1. 5 staerkste Gegenargumente\\n2. Confirmation Bias identifizieren\\n3. Robustness 1-5\\n\\nClaims:\\n${claimsList}\\n\\nDann PRE-MORTEM: \\\"Stell dir vor, die Empfehlung hat in 6 Monaten versagt. Was ist passiert?\\\"\\n\\nAntworte NUR mit validem JSON:\\n{\\n  \\\"counter_arguments\\\": [{ \\\"claim_index\\\": 1, \\\"claim_text\\\": \\\"...\\\", \\\"counters\\\": [\\\"c1\\\",\\\"c2\\\",\\\"c3\\\",\\\"c4\\\",\\\"c5\\\"], \\\"bias_risk\\\": \\\"...\\\", \\\"robustness\\\": 3 }],\\n  \\\"pre_mortem\\\": \\\"...\\\"\\n}`;\n\nconst cliEnv = { HOME: '/home/clawd', PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin', USER: 'clawd', TERM: 'xterm' };\n\nconst tmpFile = '/tmp/devils_advocate_' + Date.now() + '.txt';\nfs.writeFileSync(tmpFile, prompt);\n\nlet counterResearch = [];\nlet preMortem = '';\n\ntry {\n  const stdout = execSync(`cat \"${tmpFile}\" | claude -p --model opus`, {\n    encoding: 'utf-8', timeout: 120000, env: cliEnv, maxBuffer: 5 * 1024 * 1024\n  });\n  let raw = stdout.trim();\n  const jsonMatch = raw.match(/```(?:json)?\\s*([\\s\\S]*?)```/);\n  const toParse = jsonMatch ? jsonMatch[1] : raw;\n  const braceMatch = toParse.match(/\\{[\\s\\S]*\\}/);\n  if (braceMatch) {\n    const parsed = JSON.parse(braceMatch[0]);\n    counterResearch = parsed.counter_arguments || [];\n    preMortem = parsed.pre_mortem || '';\n  }\n} catch (err) {}\n\ntry { fs.unlinkSync(tmpFile); } catch(e) {}\n\nreturn [{ json: { counter_research: counterResearch, pre_mortem: preMortem, claims: claimsData.claims, sources: claimsData.sources, stats: claimsData.stats } }];"
+      }
+    },
+    {
+      "id": "p2-counter-search",
+      "name": "P2: Counter-Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3450,
+        450
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\nconst data = $input.first().json;\nconst counterResearch = data.counter_research || [];\n\nconst braveKey = $env.BRAVE_SEARCH_API_KEY || $env.BRAVE_API_KEY || '';\n\nlet counterSources = [];\n\nif (braveKey && counterResearch.length > 0) {\n  for (const cr of counterResearch.slice(0, 5)) {\n    const negatedQuery = (cr.counters && cr.counters[0]) ? cr.counters[0].substring(0, 100) : '';\n    if (!negatedQuery) continue;\n    try {\n      const encoded = encodeURIComponent(negatedQuery);\n      const result = execSync(`curl -s -H \"X-Subscription-Token: ${braveKey}\" \"https://api.search.brave.com/res/v1/web/search?q=${encoded}&count=3\"`, {\n        encoding: 'utf-8', timeout: 15000\n      });\n      const braveData = JSON.parse(result);\n      if (braveData.web && braveData.web.results) {\n        for (const r of braveData.web.results) {\n          counterSources.push({ url: r.url || '', title: r.title || '', snippet: r.description || '', claim_index: cr.claim_index, source_type: 'counter_search', origin: 'brave_counter', tier: 'T3', score: 0.4 });\n        }\n      }\n    } catch (err) {}\n  }\n}\n\nconst claimsWithCounter = new Set(counterResearch.map(cr => cr.claim_index));\nconst totalClaims = Math.max(1, (data.claims || []).slice(0, 10).length);\nconst counterCoverage = Math.round((claimsWithCounter.size / totalClaims) * 100);\n\nreturn [{ json: { ...data, counter_sources: counterSources, counter_coverage: counterCoverage, gate2_passed: counterCoverage >= 80 } }];"
+      }
+    },
+    {
+      "id": "p2-gate2",
+      "name": "P2: Gate 2 Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3700,
+        450
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const data = $input.first().json;\n\nconst gate2 = {\n  passed: data.gate2_passed || false,\n  counter_coverage: data.counter_coverage || 0,\n  counter_sources_count: (data.counter_sources || []).length,\n  counter_arguments_count: (data.counter_research || []).length\n};\n\nreturn [{ json: { ...data, gate2 } }];"
+      }
+    },
+    {
+      "id": "surrealdb-update-phase4",
+      "name": "SurrealDB UPDATE status=phase4",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        3950,
+        600
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:18000/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "surreal-ns",
+              "value": "research"
+            },
+            {
+              "name": "surreal-db",
+              "value": "workflow"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "={{ \"UPDATE research_run SET status='phase4', source_count=\" + ($json.sources || []).length + \", claim_count=\" + ($json.claims || []).length + \" WHERE run_id=\" + JSON.stringify($(\"Set Parameters\").first().json.run_id) + \";\" }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ICgLzc5AfiFid0By",
+          "name": "surrealdb-basic-auth"
+        }
+      }
+    },
+    {
+      "id": "p4-prepare-context",
+      "name": "P4: Prepare Synthesis Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4200,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const claimsData = $('P1: Extract Claims').first().json;\nconst params = $('Set Parameters').first().json;\n\nconst sources = claimsData.sources || [];\nconst claims = claimsData.claims || [];\n\nconst grouped = {};\nfor (const src of sources) {\n  const type = src.source_type || 'unknown';\n  if (!grouped[type]) grouped[type] = [];\n  grouped[type].push(src);\n}\n\nlet context = '# Research Sources\\n\\n';\n\nfor (const [type, srcs] of Object.entries(grouped)) {\n  context += `## ${type.toUpperCase()} Sources (${srcs.length})\\n\\n`;\n  for (const src of srcs) {\n    context += `### ${src.title || 'Untitled'}\\nURL: ${src.url || 'N/A'}\\nTier: ${src.tier || 'T3'} | Score: ${src.score || 'N/A'}\\n${src.snippet || ''}\\n\\n`;\n  }\n}\n\nif (claims.length > 0) {\n  context += '## Extracted Claims\\n\\n';\n  for (const claim of claims) {\n    context += `- [${claim.tier}] ${claim.text} (Source: ${claim.source_title || claim.source_url})\\n`;\n  }\n}\n\ntry {\n  const p2Data = $('P2: Gate 2 Check').first().json;\n  if (p2Data && p2Data.counter_research && p2Data.counter_research.length > 0) {\n    context += '\\n\\n## Counter-Research (Devil\\'s Advocate)\\n\\n';\n    for (const cr of p2Data.counter_research) {\n      context += `### Claim ${cr.claim_index}: ${cr.claim_text}\\nRobustness: ${cr.robustness}/5\\nBias Risk: ${cr.bias_risk}\\nCounter-Arguments:\\n`;\n      for (const c of (cr.counters || [])) context += `- ${c}\\n`;\n      context += '\\n';\n    }\n    if (p2Data.pre_mortem) context += `### Pre-Mortem Analysis\\n${p2Data.pre_mortem}\\n`;\n    if (p2Data.counter_sources && p2Data.counter_sources.length > 0) {\n      context += '\\n## Counter-Search Sources\\n\\n';\n      for (const cs of p2Data.counter_sources) context += `- [${cs.tier}] ${cs.title}: ${cs.url}\\n  ${cs.snippet}\\n`;\n    }\n  }\n} catch (e) {}\n\nif (context.length > 80000) context = context.substring(0, 80000) + '\\n\\n[... truncated ...]';\n\nreturn [{ json: { synthesis_input: context, mode: params.mode, query: params.query, language: params.language, source_count: sources.length, claim_count: claims.length } }];"
+      }
+    },
+    {
+      "id": "p4-if-deep",
+      "name": "P4: IF Mode = deep?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4450,
+        600
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-deep",
+              "leftValue": "={{ $json.mode }}",
+              "rightValue": "deep",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "p4-claude-synthesis",
+      "name": "P4: Claude CLI Synthesis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4700,
+        450
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\nconst data = $input.first().json;\nconst query = data.query;\nconst language = data.language || 'de';\nconst synthesisInput = data.synthesis_input || '';\n\nconst isComparison = query.match(/\\\\bvs\\\\b|versus|vergleich|gegen\\\\b|compared to/i) || data.mode === 'product_comparison';\nconst comparisonExtra = isComparison ? `\\n\\nDies ist ein PRODUKTVERGLEICH. Erstelle zusaetzlich:\\n## Vergleichsmatrix\\n[Tabelle: Kriterium | Kandidat A | Kandidat B | Bewertung]\\n## Entscheidungsmatrix\\n[Gewichtete Kriterien mit Empfehlung]\\n` : '';\nconst prompt = `Du bist ein Senior Research Analyst. Erstelle einen DEEP Research Report nach Template v3.\\n\\nQuery: \\\"${query}\\\"\\nSprache: ${language}\\n\\nQuellen und Claims:\\n${synthesisInput.substring(0, 60000)}\\n\\nTemplate v3 Pflicht-Sektionen:\\n# [Titel]\\n## VERDICT: [ADOPT | TEST | REJECT]\\n## Executive Summary\\n## Detailanalyse\\n## Quellenanalyse und Zuverlaessigkeit\\n## Widersprueche und Kontroversen\\n## Offene Fragen\\n## Quellen\\n\\nJEDE Behauptung MUSS mit [Quelle: Titel] referenziert werden.${comparisonExtra}`;\n\nconst cliEnv = { HOME: '/home/clawd', PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin', USER: 'clawd', TERM: 'xterm' };\n\nconst tmpFile = '/tmp/research_prompt_' + Date.now() + '.txt';\nrequire('fs').writeFileSync(tmpFile, prompt);\n\nlet report = '';\ntry {\n  report = execSync(`cat \"${tmpFile}\" | claude -p --model opus`, {\n    encoding: 'utf-8', timeout: 180000, env: cliEnv, maxBuffer: 10 * 1024 * 1024\n  });\n} catch (err) {\n  report = err.stdout || 'Fehler bei Claude Synthese: ' + (err.message || 'Timeout');\n}\n\ntry { require('fs').unlinkSync(tmpFile); } catch(e) {}\n\nreturn [{ json: { report_raw: report.trim(), synthesis_engine: 'claude-opus', query, language: data.language, mode: data.mode, source_count: data.source_count, claim_count: data.claim_count } }];"
+      }
+    },
+    {
+      "id": "p4-gemini-synthesis",
+      "name": "P4: Gemini CLI Synthesis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4700,
+        750
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\nconst data = $input.first().json;\nconst query = data.query;\nconst language = data.language || 'de';\nconst synthesisInput = data.synthesis_input || '';\n\nconst isComparison = query.match(/\\\\bvs\\\\b|versus|vergleich|gegen\\\\b|compared to/i) || data.mode === 'product_comparison';\nconst comparisonExtra = isComparison ? `\\n\\nDies ist ein PRODUKTVERGLEICH. Erstelle zusaetzlich:\\n## Vergleichsmatrix\\n[Tabelle: Kriterium | Kandidat A | Kandidat B | Bewertung]\\n## Entscheidungsmatrix\\n[Gewichtete Kriterien mit Empfehlung]\\n` : '';\nconst prompt = `CRITICAL: Structure your response using EXACTLY these Markdown headers. ALL 7 sections MANDATORY.\\n\\nQuery: \\\"${query}\\\"\\nSprache: ${language}\\n\\nQuellen und Claims:\\n${synthesisInput.substring(0, 30000)}\\n\\n=== REQUIRED FORMAT ===\\n# [Titel]\\n## VERDICT: [ADOPT oder TEST oder REJECT]\\n[Begruendung]\\n## Executive Summary\\n[3-5 Saetze]\\n## Hauptergebnisse\\n[Nummerierte Findings mit [Quelle: Titel]]\\n## Quellenanalyse\\n[Verteilung, Qualitaet, Luecken]\\n## Widersprueche\\n[Auflistung oder \\\"Keine wesentlichen Widersprueche\\\"]\\n## Offene Fragen\\n[Nummerierte Liste]\\n## Quellen\\n[Nummeriert mit [T1/T2/T3] Badge]\\n\\nWrite in ${language === 'de' ? 'German' : 'English'}. EVERY claim MUST reference its source.${comparisonExtra}`;\n\nconst fs = require('fs');\n\nconst cliEnv = { HOME: '/home/clawd', PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin', GEMINI_API_KEY: $env.GEMINI_API_KEY || $env.GOOGLE_GEMINI_API_KEY || '' };\n\nconst tmpFile = '/tmp/research_prompt_' + Date.now() + '.txt';\nfs.writeFileSync(tmpFile, prompt);\n\nlet report = '';\ntry {\n  report = execSync(`cat \"${tmpFile}\" | gemini -m gemini-2.5-pro -p \"Generate the research report following the exact format specified above. All 7 sections are mandatory.\"`, {\n    encoding: 'utf-8', timeout: 240000, env: cliEnv, maxBuffer: 10 * 1024 * 1024\n  });\n} catch (err) {\n  report = err.stdout || 'Fehler bei Gemini Synthese: ' + (err.message || 'Timeout');\n}\n\ntry { fs.unlinkSync(tmpFile); } catch(e) {}\n\nreturn [{ json: { report_raw: report.trim(), synthesis_engine: 'gemini', query, language: data.language, mode: data.mode, source_count: data.source_count, claim_count: data.claim_count } }];"
+      }
+    },
+    {
+      "id": "p4-post-process",
+      "name": "P4: Post-Process Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5000,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const data = $input.first().json;\nlet report = data.report_raw || '';\nconst mode = data.mode || 'standard';\n\nlet title = 'Research Report';\nconst titleMatch = report.match(/^#\\s+(.+)/m);\nif (titleMatch) title = titleMatch[1].trim();\n\nconst requiredSections = [\n  { name: 'VERDICT', pattern: /VERDICT.*?(ADOPT|TEST|REJECT)/i },\n  { name: 'Executive Summary', pattern: /Executive Summary/i },\n  { name: 'Hauptergebnisse/Detailanalyse', pattern: /(Hauptergebnisse|Detailanalyse|Key Findings)/i },\n  { name: 'Quellenanalyse', pattern: /Quellenanalyse/i },\n  { name: 'Widersprueche', pattern: /(Widersp|Kontrovers|Contradiction)/i },\n  { name: 'Offene Fragen', pattern: /(Offene Fragen|Open Questions)/i },\n  { name: 'Quellen-Liste', pattern: /(## Quellen|## Sources)/i }\n];\nlet foundSections = requiredSections.filter(s => s.pattern.test(report));\nlet templateCompliance = Math.round((foundSections.length / requiredSections.length) * 100);\nlet missingSections = requiredSections.filter(s => !s.pattern.test(report)).map(s => s.name);\n\nif (missingSections.length > 0) {\n  const stubs = {\n    'VERDICT': '\\n\\n## VERDICT: TEST\\n[Automatisch: Keine eindeutige Empfehlung ableitbar.]\\n',\n    'Executive Summary': '\\n\\n## Executive Summary\\n[Automatisch generiert.]\\n',\n    'Hauptergebnisse/Detailanalyse': '\\n\\n## Hauptergebnisse\\n[Siehe Reportinhalt oben.]\\n',\n    'Quellenanalyse': '\\n\\n## Quellenanalyse\\n[Automatisch: Quellenanalyse fehlt.]\\n',\n    'Widersprueche': '\\n\\n## Widersprueche\\n[Keine expliziten Widersprueche dokumentiert.]\\n',\n    'Offene Fragen': '\\n\\n## Offene Fragen\\n1. Weitere Recherche erforderlich.\\n',\n    'Quellen-Liste': '\\n\\n## Quellen\\n[Siehe Inline-Referenzen.]\\n'\n  };\n  for (const missing of missingSections) { if (stubs[missing]) report += stubs[missing]; }\n  foundSections = requiredSections.filter(s => s.pattern.test(report));\n  templateCompliance = Math.round((foundSections.length / requiredSections.length) * 100);\n  missingSections = requiredSections.filter(s => !s.pattern.test(report)).map(s => s.name);\n}\n\nconst verdictMatch = report.match(/VERDICT.*?(ADOPT|TEST|REJECT)/i);\nconst reportVerdict = verdictMatch ? verdictMatch[1].toUpperCase() : null;\n\nlet qualityScore = 0;\nconst wordCount = report.split(/\\s+/).length;\nif (wordCount > 200) qualityScore += 10;\nif (wordCount > 500) qualityScore += 10;\nif (wordCount > 1000) qualityScore += 10;\nqualityScore += Math.round(templateCompliance * 0.35);\nconst sourceRefs = (report.match(/\\[Quelle:|Source:|[T123]\\]/gi) || []).length;\nif (sourceRefs >= 3) qualityScore += 10;\nif (sourceRefs >= 7) qualityScore += 10;\nconst headingCount = (report.match(/^##\\s/gm) || []).length;\nif (headingCount >= 3) qualityScore += 8;\nif (headingCount >= 5) qualityScore += 7;\nqualityScore = Math.min(100, qualityScore);\n\nconst sourceCount = data.source_count || 0;\nlet confidenceScore = Math.min(100, sourceCount * 8 + 20);\n\nlet verdict = reportVerdict || 'low_confidence';\nif (!reportVerdict) {\n  if (confidenceScore >= 70 && qualityScore >= 60) verdict = 'high_confidence';\n  else if (confidenceScore >= 50 || qualityScore >= 50) verdict = 'medium_confidence';\n}\n\ntry {\n  const p1Data = $('P1: Extract Claims').first().json;\n  const originalSources = (p1Data.sources || []).filter(s => s.url && s.url.length > 5);\n  if (originalSources.length > 0) {\n    const quellenLines = originalSources.slice(0, 20).map((s, i) => (i+1) + '. [' + (s.tier || 'T3') + '] ' + (s.title || 'Source').substring(0, 80) + ' \\u2014 ' + s.url);\n    const quellenSection = '\\n\\n## Quellen\\n' + quellenLines.join('\\n') + '\\n';\n    if (/## Quellen\\n/i.test(report)) {\n      report = report.replace(/## Quellen\\n[\\s\\S]*?(?=\\n## |$)/, quellenSection.trim());\n    } else {\n      report += quellenSection;\n    }\n  }\n} catch(e) {}\n\nreturn [{ json: { report_markdown: report, title, quality_score: qualityScore, confidence_score: confidenceScore, verdict, template_compliance: templateCompliance, missing_sections: missingSections, report_verdict: reportVerdict, word_count: wordCount, source_refs: sourceRefs, mode, synthesis_engine: data.synthesis_engine, query: data.query, language: data.language, source_count: data.source_count, claim_count: data.claim_count } }];"
+      }
+    },
+    {
+      "id": "p3-if-not-quick",
+      "name": "P3: IF not quick?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        5250,
+        600
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-p3-not-quick",
+              "leftValue": "={{ $json.mode }}",
+              "rightValue": "quick",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "p3-verification",
+      "name": "P3: Verification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5500,
+        450
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\nconst fs = require('fs');\n\nconst data = $input.first().json;\nconst report = data.report_markdown || '';\nconst mode = data.mode || 'standard';\n\nconst tmpFile = '/tmp/report_verify_' + Date.now() + '.md';\nfs.writeFileSync(tmpFile, report);\n\nconst cliEnv = { HOME: '/home/clawd', PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin', PYTHONPATH: '', USER: 'clawd',\n  GEMINI_API_KEY: $env.GEMINI_API_KEY || $env.GOOGLE_GEMINI_API_KEY || '',\n  ANTHROPIC_API_KEY: $env.ANTHROPIC_API_KEY || '',\n  BRAVE_SEARCH_API_KEY: $env.BRAVE_SEARCH_API_KEY || $env.BRAVE_API_KEY || '',\n  TAVILY_API_KEY: $env.TAVILY_API_KEY || '',\n  XAI_API_KEY: $env.XAI_API_KEY || '',\n};\n\n\nlet verification = { passed: true, issues: [], warnings: [], feedback: '', source_count: 0, llm_calls: 0 };\n\ntry {\n  const flags = mode === 'deep' ? '--full --json' : '--cove --judge --json';\n  const stdout = execSync(`python3 /home/clawd/.openclaw/workspace/scripts/research-quality-gate.py \"${tmpFile}\" ${flags}`, {\n    encoding: 'utf-8', timeout: 180000, env: cliEnv, maxBuffer: 5 * 1024 * 1024\n  });\n  const jsonMatch = stdout.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) verification = JSON.parse(jsonMatch[0]);\n} catch (err) {\n  const stdout = (err.stdout || '').trim();\n  try {\n    const jsonMatch = stdout.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) verification = JSON.parse(jsonMatch[0]);\n  } catch (parseErr) {\n    verification.warnings.push('Quality gate script error: ' + (err.message || 'unknown').substring(0, 200));\n  }\n}\n\ntry { fs.unlinkSync(tmpFile); } catch(e) {}\n\nreturn [{ json: { ...data, verification } }];"
+      }
+    },
+    {
+      "id": "p3-gate3",
+      "name": "P3: Gate 3 Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5750,
+        450
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const data = $input.first().json;\nconst mode = data.mode || 'standard';\nconst v = data.verification || {};\n\nlet gate3 = { passed: false, mode, issues: v.issues || [], warnings: v.warnings || [], llm_calls: v.llm_calls || 0 };\n\nlet judgeScore = null;\nif (typeof v.judge_score === 'number' && v.judge_score > 0) judgeScore = v.judge_score;\nelse if (v.judge && typeof v.judge.overall_score === 'number' && v.judge.overall_score > 0) judgeScore = v.judge.overall_score;\nelse if (v.judge && typeof v.judge.score === 'number' && v.judge.score > 0) judgeScore = v.judge.score;\nelse if (typeof v.overall_judge_score === 'number' && v.overall_judge_score > 0) judgeScore = v.overall_judge_score;\nelse if (v.judge && typeof v.judge.average_score === 'number' && v.judge.average_score > 0) judgeScore = v.judge.average_score;\ngate3.judge_score = judgeScore;\n\nconst coveChecked = (v.cove && v.cove.claims_checked) ? v.cove.claims_checked : 0;\nconst coveInconsistencies = (v.cove && v.cove.inconsistencies_found) ? v.cove.inconsistencies_found : 0;\ngate3.cove_claims_checked = coveChecked;\ngate3.cove_inconsistencies = coveInconsistencies;\nconst coveRate = coveChecked > 0 ? (coveInconsistencies / coveChecked) : 0;\ngate3.cove_inconsistency_rate = Math.round(coveRate * 100);\n\nif (mode === 'deep') {\n  const covePassed = coveRate <= 0.3;\n  const judgePassed = judgeScore === null || judgeScore >= 3.5;\n  gate3.passed = covePassed && judgePassed;\n  if (!covePassed) gate3.issues.push('CoVe: ' + Math.round(coveRate*100) + '% inconsistency exceeds 30% deep threshold');\n  if (judgeScore !== null && judgeScore < 3.5) gate3.issues.push('Judge score ' + judgeScore + '/5.0 below deep threshold 3.5');\n  gate3.gate_logic = 'deep: cove<=30%+judge>=3.5';\n} else {\n  const covePassed = coveRate <= 0.4;\n  const judgePassed = judgeScore === null || judgeScore >= 3.0;\n  gate3.passed = covePassed && judgePassed;\n  if (!covePassed) gate3.issues.push('CoVe: ' + Math.round(coveRate*100) + '% inconsistency exceeds 40% threshold');\n  if (judgeScore !== null && judgeScore < 3.0) gate3.issues.push('Judge score ' + judgeScore + '/5.0 below standard threshold 3.0');\n  gate3.gate_logic = 'standard: cove<=40%+judge>=3.0';\n}\n\n\n// FActScore extraction (Deep mode only)\nconst factScoreData = v.factscore || null;\nif (factScoreData) {\n  gate3.factscore = typeof factScoreData.factscore === 'number' ? factScoreData.factscore : null;\n  gate3.factscore_supported = factScoreData.supported || 0;\n  gate3.factscore_total = factScoreData.total || 0;\n  gate3.factscore_detail = gate3.factscore_supported + '/' + gate3.factscore_total + ' claims supported';\n} else {\n  gate3.factscore = null;\n  gate3.factscore_detail = null;\n}\n\nreturn [{ json: { ...data, gate3 } }];"
+      }
+    },
+    {
+      "id": "retry-if-failed",
+      "name": "Retry: IF Gate3 Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        6000,
+        450
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "condition-retry",
+              "leftValue": "={{ $json.gate3 ? $json.gate3.passed : true }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "retry-update-surrealdb",
+      "name": "Retry: SurrealDB Mark Failed Phase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        6250,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:18000/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "surreal-ns",
+              "value": "research"
+            },
+            {
+              "name": "surreal-db",
+              "value": "workflow"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "={{ \"UPDATE research_run SET retry_count = retry_count + 1, failed_phase = 'phase3', gate3_passed = false, status = 'failed' WHERE run_id=\" + JSON.stringify($(\"Set Parameters\").first().json.run_id) + \";\" }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ICgLzc5AfiFid0By",
+          "name": "surrealdb-basic-auth"
+        }
+      }
+    },
+    {
+      "id": "retry-telegram-notify",
+      "name": "Retry: Telegram Gate Failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6500,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst params = $('Set Parameters').first().json;\nconst gate3 = $('P3: Gate 3 Check').first().json.gate3 || {};\n\nconst message = `\\u26a0\\ufe0f Gate 3 FAILED\\n\\nRun: ${params.run_id}\\nQuery: ${params.query}\\nMode: ${params.mode}\\nIssues: ${(gate3.issues || []).join('; ')}\\n\\nRun marked as failed. Manual retry or HITL escalation needed.`;\n\ntry {\n  const body = JSON.stringify({ chat_id: Number($env.TELEGRAM_CHAT_ID || ''), text: message });\n  execSync(`curl -s -X POST -H \"Content-Type: application/json\" -d '${body.replace(/'/g, \"'\\\\''\")}'  \"https://api.telegram.org/bot${$env.RESEARCH_BOT_TOKEN || ''}/sendMessage\"`, {\n    encoding: 'utf-8', timeout: 10000\n  });\n} catch(e) {}\n\nreturn [{ json: { notified: true, run_id: params.run_id } }];"
+      }
+    },
+    {
+      "id": "d-prepare-telegram",
+      "name": "D: Prepare Telegram Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6250,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const telegramBotToken = $env.RESEARCH_BOT_TOKEN || '';\nconst telegramChatIdDefault = $env.TELEGRAM_CHAT_ID || '';\n\n// Multi-User Chat-ID Resolution\nconst userId = $('Set Parameters').first().json.user_id || '';\nconst userChatIds = {\n  'nico': $env.TELEGRAM_CHAT_ID_NICO || telegramChatIdDefault,\n  'sabine': $env.TELEGRAM_CHAT_ID_SABINE || '',\n};\n\n// Routing-Logik: System-Runs kriegen kein Telegram\nconst triggerSource = $('Set Parameters').first().json.trigger_source || '';\nconst isSystemRun = !userId || ['hive', 'schedule'].includes(triggerSource);\nconst shouldSendTelegram = !isSystemRun && !!(userChatIds[userId] || telegramChatIdDefault);\nconst shouldCallback = !!$('Set Parameters').first().json.callback_webhook;\nconst telegramChatId = shouldSendTelegram ? (userChatIds[userId] || telegramChatIdDefault) : '';\n\nconst data = $input.first().json;\nconst params = $('Set Parameters').first().json;\nconst callbackWebhook = params.callback_webhook || '';\nconst isAgent = ['openclaw', 'hive'].includes(params.trigger_source || '');\n\n\nconst modeBadge = data.mode === 'deep' ? '\\ud83d\\udd2c DEEP' : data.mode === 'quick' ? '\\u26a1 QUICK' : '\\ud83d\\udcca STANDARD';\nconst verdictMap = { 'ADOPT': '\\u2705 ADOPT', 'TEST': '\\ud83d\\udd2c TEST', 'REJECT': '\\u274c REJECT', 'high_confidence': '\\u2705 High', 'medium_confidence': '\\u26a0\\ufe0f Medium', 'low_confidence': '\\u2753 Low' };\nconst verdictStr = verdictMap[data.verdict] || data.verdict;\n\nlet message = `${modeBadge} Research Report\\n\\n`;\nmessage += `*${data.title || 'Research Report'}*\\n`;\nmessage += `Query: _${params.query}_\\n\\n`;\nmessage += `Verdict: *${verdictStr}*\\n`;\nmessage += `Quality: ${data.quality_score}/100 | Template: ${data.template_compliance || 0}%\\n`;\nmessage += `Sources: ${data.source_count || 0} | Claims: ${data.claim_count || 0}\\n`;\nmessage += `Engine: ${data.synthesis_engine || 'unknown'} | Words: ${data.word_count || 0}\\n`;\n\nif (data.gate3) {\n  const g3 = data.gate3;\n  message += `\\nVerification: ${g3.passed ? '\\u2705' : '\\u274c'} Gate 3 ${g3.passed ? 'PASSED' : 'FAILED'}\\n`;\n  if (g3.judge_score !== null && g3.judge_score !== undefined) message += `  Judge: ${g3.judge_score}/5.0\\n`;\n  if (g3.cove_claims_checked) message += `  CoVe: ${g3.cove_claims_checked} claims, ${g3.cove_inconsistencies || 0} issues\\n`;\n}\n\n\nif (data.gate3 && data.gate3.factscore !== null && data.gate3.factscore !== undefined) {\n  message += '  FActScore: ' + (data.gate3.factscore * 100).toFixed(0) + '% (' + data.gate3.factscore_detail + ')\\n';\n}\n\nif (data.gate2) {\n  const g2 = data.gate2;\n  message += `\\nCounter-Research: ${g2.passed ? '\\u2705' : '\\u26a0\\ufe0f'} Coverage ${g2.counter_coverage || 0}%\\n`;\n}\n\nmessage += `\\n--- Report Preview ---\\n\\n`;\nmessage += (data.report_markdown || '').substring(0, 3000);\n\nconst sanitize = (text) => {\n  let s = text;\n  s = s.replace(/```[\\s\\S]*?```/g, '(code block)');\n  s = s.replace(/`/g, \"'\");\n  s = s.replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, '$1');\n  s = s.replace(/\\[([^\\]]{1,100})\\]/g, '($1)');\n  s = s.replace(/[\\[\\]]/g, '');\n  const countChar = (str, ch) => str.split(ch).length - 1;\n  if (countChar(s, '*') % 2 !== 0) s = s.replace(/\\*/g, '');\n  if (countChar(s, '_') % 2 !== 0) s = s.replace(/_/g, ' ');\n  return s;\n};\nmessage = sanitize(message);\nif (message.length > 4096) message = message.substring(0, 4090) + '\\n(...)';\n\nreturn [{ json: { telegram_message: message, run_id: params.run_id, telegram_bot_token: telegramBotToken, telegram_chat_id: telegramChatId, should_send_telegram: shouldSendTelegram, should_callback: shouldCallback, user_id: userId } }];"
+      }
+    },
+    {
+      "id": "d-telegram-send",
+      "name": "D: Telegram Send Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        6500,
+        600
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://api.telegram.org/bot\" + $(\"D: Prepare Telegram Message\").first().json.telegram_bot_token + \"/sendMessage\" }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: Number($(\"D: Prepare Telegram Message\").first().json.telegram_chat_id), text: $(\"D: Prepare Telegram Message\").first().json.telegram_message, parse_mode: \"Markdown\" }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "d-surrealdb-persist-code",
+      "name": "D: SurrealDB Persist",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6750,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const report = $('P4: Post-Process Report').first().json;\nconst claimsData = $('P1: Extract Claims').first().json;\nconst params = $('Set Parameters').first().json;\n\nlet gate2Data = {};\nlet gate3Data = {};\ntry { gate2Data = $('P2: Gate 2 Check').first().json.gate2 || {}; } catch(e) {}\ntry { gate3Data = $('P3: Gate 3 Check').first().json.gate3 || {}; } catch(e) {}\n\nlet gate1Data = {};\ntry { gate1Data = $('Gate 1: Source Sufficiency').first().json.gate1 || {}; } catch(e) {}\n\nconst runId = params.run_id;\nconst sources = claimsData.sources || [];\nconst claims = claimsData.claims || [];\n\nconst validVerdicts = ['ADOPT', 'TEST', 'REJECT'];\nconst verdict = validVerdicts.includes(report.verdict) ? report.verdict : null;\n\nlet sql = '';\n\nconst reportFields = [];\nreportFields.push(`run_id=research_run:\\u0060${runId}\\u0060`);\nreportFields.push(`title=${JSON.stringify(report.title || 'Research Report')}`);\nreportFields.push(`content_markdown=${JSON.stringify((report.report_markdown || '').substring(0, 50000))}`);\nreportFields.push(`quality_score=${report.quality_score || 0}`);\nif (verdict) reportFields.push(`verdict=${JSON.stringify(verdict)}`);\nreportFields.push(`synthesis_engine=${JSON.stringify(report.synthesis_engine || 'unknown')}`);\nreportFields.push(`template_version='v3'`);\nreportFields.push(`source_count=${report.source_count || 0}`);\nreportFields.push(`claim_count=${report.claim_count || 0}`);\nreportFields.push(`verified_claim_count=0`);\nreportFields.push(`platform_count=0`);\nreportFields.push(`created_at=time::now()`);\nsql += `CREATE research_report SET ${reportFields.join(', ')};\\n`;\n\nfor (const src of sources.slice(0, 20)) {\n  const srcUrl = src.url || '';\n  if (!srcUrl) continue;\n  const srcDomain = srcUrl.replace(/^https?:\\/\\//, '').split('/')[0] || 'unknown';\n  const validTypes = ['web', 'academic', 'social', 'youtube', 'rss', 'creator'];\n  const srcType = validTypes.includes(src.source_type) ? src.source_type : 'web';\n  const urlHash = srcUrl.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 100);\n  const srcFields = [];\n  srcFields.push(`url=${JSON.stringify(srcUrl)}`);\n  srcFields.push(`domain=${JSON.stringify(srcDomain)}`);\n  srcFields.push(`title=${JSON.stringify(src.title || '')}`);\n  srcFields.push(`source_type=${JSON.stringify(srcType)}`);\n  srcFields.push(`trust_level=${JSON.stringify(src.tier || 'T3')}`);\n  srcFields.push(`last_seen=time::now()`);\n  srcFields.push(`first_seen=time::now()`);\n  srcFields.push(`run_count=1`);\n  srcFields.push(`reputation_score=0.5`);\n  sql += `UPSERT source_registry:\\`${urlHash}\\` SET ${srcFields.join(', ')};\\n`;\n}\n\nfor (const claim of claims.slice(0, 20)) {\n  const claimFields = [];\n  claimFields.push(`run_id=research_run:\\u0060${runId}\\u0060`);\n  claimFields.push(`text=${JSON.stringify(claim.text || '')}`);\n  claimFields.push(`confidence=${claim.confidence || 0.5}`);\n  claimFields.push(`final_status='pending'`);\n  sql += `CREATE research_claim SET ${claimFields.join(', ')};\\n`;\n}\n\nconst g2Coverage = gate2Data.counter_coverage || 0;\nconst g2Passed = gate2Data.passed ? 'true' : 'false';\nconst g3Passed = gate3Data.passed ? 'true' : 'false';\nconst judgeScore = (gate3Data.judge_score !== undefined && gate3Data.judge_score !== null) ? gate3Data.judge_score : null;\n\nconst updateFields = [];\nupdateFields.push(`status='completed'`);\nupdateFields.push(`completed_at=time::now()`);\nupdateFields.push(`quality_score=${report.quality_score || 0}`);\nif (verdict) updateFields.push(`verdict=${JSON.stringify(verdict)}`);\nupdateFields.push(`counter_coverage=${g2Coverage}`);\nupdateFields.push(`gate2_passed=${g2Passed}`);\nupdateFields.push(`gate3_passed=${g3Passed}`);\nif (judgeScore !== null) updateFields.push(`judge_score=${judgeScore}`);\nupdateFields.push(`source_count=${sources.length}`);\nupdateFields.push(`claim_count=${claims.length}`);\n\nconst cost = params.cost || {};\nupdateFields.push(`cost=${JSON.stringify(cost)}`);\n\n// Multi-User: user_id persistieren\nconst userId = params.user_id || '';\nif (userId) updateFields.push(`user_id=${JSON.stringify(userId)}`);\n\nsql += `UPDATE research_run SET ${updateFields.join(', ')} WHERE run_id=${JSON.stringify(runId)};\\n`;\n\nreturn [{ json: { batch_sql: sql, run_id: runId } }];"
+      }
+    },
+    {
+      "id": "d-surrealdb-execute",
+      "name": "D: SurrealDB Execute Persist",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        7000,
+        600
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:18000/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "surreal-ns",
+              "value": "research"
+            },
+            {
+              "name": "surreal-db",
+              "value": "workflow"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "={{ $json.batch_sql }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ICgLzc5AfiFid0By",
+          "name": "surrealdb-basic-auth"
+        }
+      }
+    },
+    {
+      "id": "d-reputation-update",
+      "name": "D: Reputation Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7250,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const claimsData = $('P1: Extract Claims').first().json;\nconst params = $('Set Parameters').first().json;\nconst sources = claimsData.sources || [];\nconst runId = params.run_id;\n\nlet verificationData = {};\ntry { verificationData = $('P3: Verification').first().json.verification || {}; } catch(e) {}\n\nlet sql = 'BEGIN TRANSACTION;\\n';\n\n// Bookkeeping: bump run_count + last_seen for all sources (no audit event — pure metadata)\nfor (const src of sources.slice(0, 20)) {\n  const srcUrl = src.url || '';\n  if (!srcUrl) continue;\n  const urlHash = srcUrl.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 100);\n  sql += `UPDATE source_registry:\\`${urlHash}\\` SET run_count += 1, last_seen = time::now();\\n`;\n}\n\n// Per-source reputation update with audit event.\n// Two-statement split for the score formula because SurrealDB evaluates multi-SET\n// expressions against PRE-update field values, and the legacy formula also did int division.\nif (verificationData.cove && verificationData.cove.claims_checked > 0) {\n  const inconsistencyRate = (verificationData.cove.inconsistencies_found || 0) / verificationData.cove.claims_checked;\n  let evtType = null;\n  let inc = null;\n  if (inconsistencyRate <= 0.3) { evtType = 'correct'; inc = 'correct_count'; }\n  else if (inconsistencyRate > 0.5) { evtType = 'incorrect'; inc = 'incorrect_count'; }\n  if (evtType) {\n    let i = 0;\n    for (const src of sources.slice(0, 20)) {\n      const srcUrl = src.url || '';\n      if (!srcUrl) continue;\n      const urlHash = srcUrl.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 100);\n      sql += `LET $b${i} = (SELECT reputation_score, trust_level FROM source_registry:\\`${urlHash}\\`)[0];\\n`;\n      sql += `UPDATE source_registry:\\`${urlHash}\\` SET ${inc} += 1;\\n`;\n      sql += `UPDATE source_registry:\\`${urlHash}\\` SET reputation_score = (correct_count + 1.0) / (correct_count + incorrect_count + 2.0);\\n`;\n      sql += `LET $a${i} = (SELECT reputation_score, trust_level FROM source_registry:\\`${urlHash}\\`)[0];\\n`;\n      sql += `CREATE source_reliability_event CONTENT { source: source_registry:\\`${urlHash}\\`, event_type: '${evtType}', old_score: $b${i}.reputation_score, new_score: $a${i}.reputation_score, delta: $a${i}.reputation_score - $b${i}.reputation_score, trust_level_before: $b${i}.trust_level, trust_level_after: $a${i}.trust_level, run_id: research_run:\\`${runId}\\` };\\n`;\n      i++;\n    }\n  }\n}\n\n// Auto-promote: capture candidates -> bulk UPDATE -> emit events for each affected row\nsql += `LET $promote = (SELECT id, reputation_score, trust_level FROM source_registry WHERE reputation_score >= 0.80 AND run_count >= 5 AND trust_level = 'T3');\\n`;\nsql += `UPDATE source_registry SET trust_level = 'T2' WHERE reputation_score >= 0.80 AND run_count >= 5 AND trust_level = 'T3';\\n`;\nsql += `FOR $row IN $promote { CREATE source_reliability_event CONTENT { source: $row.id, event_type: 'manual_override', old_score: $row.reputation_score, new_score: $row.reputation_score, delta: 0.0, trust_level_before: $row.trust_level, trust_level_after: 'T2', run_id: research_run:\\`${runId}\\` }; };\\n`;\n\n// Auto-downgrade: same pattern\nsql += `LET $downgrade = (SELECT id, reputation_score, trust_level FROM source_registry WHERE reputation_score < 0.30 AND run_count >= 3 AND trust_level != 'untrusted');\\n`;\nsql += `UPDATE source_registry SET trust_level = 'untrusted' WHERE reputation_score < 0.30 AND run_count >= 3 AND trust_level != 'untrusted';\\n`;\nsql += `FOR $row IN $downgrade { CREATE source_reliability_event CONTENT { source: $row.id, event_type: 'manual_override', old_score: $row.reputation_score, new_score: $row.reputation_score, delta: 0.0, trust_level_before: $row.trust_level, trust_level_after: 'untrusted', run_id: research_run:\\`${runId}\\` }; };\\n`;\n\nsql += 'COMMIT TRANSACTION;\\n';\n\nreturn [{ json: { reputation_sql: sql } }];\n"
+      }
+    },
+    {
+      "id": "d-reputation-execute",
+      "name": "D: Reputation Execute",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        7500,
+        600
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:18000/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "surreal-ns",
+              "value": "research"
+            },
+            {
+              "name": "surreal-db",
+              "value": "workflow"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "={{ $json.reputation_sql }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ICgLzc5AfiFid0By",
+          "name": "surrealdb-basic-auth"
+        }
+      }
+    },
+    {
+      "id": "d-kb-writeback",
+      "name": "D: KB-Writeback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7750,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const claimsData = $('P1: Extract Claims').first().json;\nconst params = $('Set Parameters').first().json;\nconst claims = claimsData.claims || [];\nconst runId = params.run_id;\n\nlet gate3Data = {};\ntry { gate3Data = $('P3: Gate 3 Check').first().json.gate3 || {}; } catch(e) {}\n\nlet sql = '';\n\nif (gate3Data.passed) {\n  const verifiedClaims = claims.filter(c => c.tier === 'T1' || c.tier === 'T2').slice(0, 10);\n  for (const claim of verifiedClaims) {\n    sql += `CREATE kb_sync SET claim_id = (SELECT id FROM research_claim WHERE run_id = research_run:\\`${runId}\\` AND text = ${JSON.stringify(claim.text)} LIMIT 1)[0].id, kb_namespace = 'openclaw/knowledge', sync_status = 'pending';\\n`;\n  }\n}\n\nreturn [{ json: { kb_sql: sql || '-- no claims to sync', has_syncs: sql.length > 0 } }];"
+      }
+    },
+    {
+      "id": "d-kb-writeback-execute",
+      "name": "D: KB-Writeback Execute",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        8000,
+        600
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:18000/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "surreal-ns",
+              "value": "research"
+            },
+            {
+              "name": "surreal-db",
+              "value": "workflow"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "={{ $json.kb_sql }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ICgLzc5AfiFid0By",
+          "name": "surrealdb-basic-auth"
+        }
+      }
+    },
+    {
+      "id": "d-telegram-feedback",
+      "name": "D: Telegram Feedback Buttons",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        8250,
+        600
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://api.telegram.org/bot\" + $(\"D: Prepare Telegram Message\").first().json.telegram_bot_token + \"/sendMessage\" }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: Number($(\"D: Prepare Telegram Message\").first().json.telegram_chat_id), text: \"War dieser Report hilfreich? (Run: \" + $(\"Set Parameters\").first().json.run_id + \")\", reply_markup: { inline_keyboard: [[{ text: \"\\ud83d\\udc4d Hilfreich\", callback_data: \"feedback_up_\" + $(\"Set Parameters\").first().json.run_id }, { text: \"\\ud83d\\udc4e Nicht hilfreich\", callback_data: \"feedback_down_\" + $(\"Set Parameters\").first().json.run_id }]] } }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "cache-check",
+      "name": "Cache: Check Similar Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        800
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\nconst params = $('Set Parameters').first().json;\nconst query = params.query;\nconst keywords = query.toLowerCase().replace(/[^a-z0-9\\u00e4\\u00f6\\u00fc\\u00df\\s]/g, '').split(/\\s+/).filter(w => w.length > 3);\n\nif (keywords.length === 0) return [{ json: { cache_hit: false, cached_report: null } }];\n\n\nlet cacheHit = false;\nlet cachedReport = null;\n\ntry {\n  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();\n  const sql = `SELECT *, research_report.content_markdown as report FROM research_run WHERE status = 'completed' AND quality_score >= 70 AND started_at > '${weekAgo}' ORDER BY started_at DESC LIMIT 20;`;\n  const result = execSync(`curl -s -X POST -H \"surreal-ns: research\" -H \"surreal-db: workflow\" -H \"Content-Type: application/json\" -H \"Accept: application/json\" --user \"root:root\" -d '${sql}' \"http://127.0.0.1:18000/sql\"`, {\n    encoding: 'utf-8', timeout: 10000\n  });\n  const data = JSON.parse(result);\n  const runs = (data[0] && data[0].result) || [];\n\n  for (const run of runs) {\n    const runQuery = (run.query || '').toLowerCase();\n    const matchCount = keywords.filter(kw => runQuery.includes(kw)).length;\n    const matchRatio = matchCount / keywords.length;\n    if (matchRatio >= 0.7) {\n      cacheHit = true;\n      cachedReport = { run_id: run.run_id, query: run.query, quality_score: run.quality_score, started_at: run.started_at };\n      break;\n    }\n  }\n} catch (e) {}\n\nreturn [{ json: { cache_hit: cacheHit, cached_report: cachedReport } }];"
+      }
+    },
+    {
+      "id": "pdf-export",
+      "name": "D: PDF Export",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3400,
+        600
+      ],
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst { execSync } = require('child_process');\nconst data = $input.first().json;\nconst runId = $('Set Parameters').first().json.run_id;\n\nconst mdPath = `/tmp/research_${runId}.md`;\nconst pdfPath = `/tmp/research_${runId}.pdf`;\n\nfs.writeFileSync(mdPath, data.report_markdown || '');\n\ntry {\n  execSync(`pandoc \"${mdPath}\" -o \"${pdfPath}\" --pdf-engine=pdflatex -V geometry:margin=2cm -V colorlinks=true -V header-includes=\"\\\\usepackage{fancyhdr}\" --standalone 2>/dev/null || pandoc \"${mdPath}\" -o \"${pdfPath}\" -t html --self-contained 2>/dev/null`, {\n    encoding: 'utf-8',\n    timeout: 60000,\n    env: { ...process.env, HOME: '/home/clawd', PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin' }\n  });\n  data.pdf_path = pdfPath;\n  data.pdf_generated = true;\n} catch (err) {\n  try {\n    execSync(`pandoc \"${mdPath}\" -o \"${pdfPath}\" -t html5 --metadata title=\"Research Report\"`, {\n      encoding: 'utf-8', timeout: 30000\n    });\n    data.pdf_path = pdfPath;\n    data.pdf_generated = true;\n  } catch (e2) {\n    data.pdf_path = null;\n    data.pdf_generated = false;\n    data.pdf_error = (e2.message || '').substring(0, 200);\n  }\n}\n\ntry { fs.unlinkSync(mdPath); } catch(e) {}\n\nreturn [{ json: data }];"
+      }
+    },
+    {
+      "id": "drive-archive",
+      "name": "D: Google Drive Archive",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        600
+      ],
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst { execSync } = require('child_process');\n\nconst data = $input.first().json;\nconst params = $('Set Parameters').first().json;\n\n\nconst keyPath = $env.GOOGLE_DRIVE_SERVICE_KEY_PATH || '';\nconst folderId = $env.GOOGLE_DRIVE_FOLDER_ID || '';\n\nif (!keyPath || !folderId) {\n  return [{ json: { ...data, drive_uploaded: false, drive_skip_reason: 'No GOOGLE_DRIVE_SERVICE_KEY_PATH or GOOGLE_DRIVE_FOLDER_ID in .env' } }];\n}\n\nif (!fs.existsSync(keyPath)) {\n  return [{ json: { ...data, drive_uploaded: false, drive_skip_reason: 'Service key file not found: ' + keyPath } }];\n}\n\nconst runId = params.run_id;\nconst title = (data.title || 'Research Report').replace(/[^a-zA-Z0-9_\\- ]/g, '');\nconst timestamp = new Date().toISOString().split('T')[0];\nconst fileName = `${timestamp}_${title}_${runId}`;\n\nconst uploadScript = `\nimport json, sys, os\nfrom google.oauth2 import service_account\nfrom googleapiclient.discovery import build\nfrom googleapiclient.http import MediaFileUpload\n\nkey_path = sys.argv[1]\nfolder_id = sys.argv[2]\nmd_content = sys.argv[3]\npdf_path = sys.argv[4] if len(sys.argv) > 4 else None\nfile_name = sys.argv[5] if len(sys.argv) > 5 else 'report'\n\ncreds = service_account.Credentials.from_service_account_file(key_path, scopes=['https://www.googleapis.com/auth/drive.file'])\nservice = build('drive', 'v3', credentials=creds)\n\n# Upload Markdown\nmd_path = '/tmp/gdrive_upload.md'\nwith open(md_path, 'w') as f:\n    f.write(md_content)\n\nmd_meta = {'name': file_name + '.md', 'parents': [folder_id]}\nmd_media = MediaFileUpload(md_path, mimetype='text/markdown')\nmd_file = service.files().create(body=md_meta, media_body=md_media, fields='id,webViewLink').execute()\n\nresult = {'markdown_id': md_file.get('id'), 'markdown_link': md_file.get('webViewLink')}\n\n# Upload PDF if exists\nif pdf_path and os.path.exists(pdf_path):\n    pdf_meta = {'name': file_name + '.pdf', 'parents': [folder_id]}\n    pdf_media = MediaFileUpload(pdf_path, mimetype='application/pdf')\n    pdf_file = service.files().create(body=pdf_meta, media_body=pdf_media, fields='id,webViewLink').execute()\n    result['pdf_id'] = pdf_file.get('id')\n    result['pdf_link'] = pdf_file.get('webViewLink')\n\nos.remove(md_path)\nprint(json.dumps(result))\n`;\n\nconst scriptPath = '/tmp/gdrive_upload_' + Date.now() + '.py';\nfs.writeFileSync(scriptPath, uploadScript);\n\ntry {\n  const mdContent = (data.report_markdown || '').replace(/'/g, \"'\");\n  const pdfPath = data.pdf_path || '';\n  const stdout = execSync(\n    `python3 \"${scriptPath}\" \"${keyPath}\" \"${folderId}\" '${mdContent.substring(0, 50000).replace(/'/g, \"\\'\")}' \"${pdfPath}\" \"${fileName}\"`,\n    { encoding: 'utf-8', timeout: 60000 }\n  );\n  const result = JSON.parse(stdout.trim());\n  data.drive_uploaded = true;\n  data.drive_links = result;\n} catch (err) {\n  data.drive_uploaded = false;\n  data.drive_error = (err.message || '').substring(0, 300);\n}\n\ntry { fs.unlinkSync(scriptPath); } catch(e) {}\n\nreturn [{ json: data }];"
+      }
+    },
+    {
+      "id": "notebooklm-export",
+      "name": "D: NotebookLM Export",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3800,
+        600
+      ],
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst data = $input.first().json;\nconst params = $('Set Parameters').first().json;\nconst claimsData = $('P1: Extract Claims').first().json;\n\nconst runId = params.run_id;\nconst exportDir = `/tmp/notebooklm_export_${runId}`;\n\ntry { fs.mkdirSync(exportDir, { recursive: true }); } catch(e) {}\n\n// 1. Optimized Markdown (clean, no n8n metadata)\nlet cleanMd = data.report_markdown || '';\ncleanMd = cleanMd.replace(/<!--[\\s\\S]*?-->/g, '');\ncleanMd = cleanMd.replace(/\\n{3,}/g, '\\n\\n');\n\nconst mdPath = `${exportDir}/report.md`;\nfs.writeFileSync(mdPath, cleanMd);\n\n// 2. Sources JSON with trust levels\nconst sources = (claimsData.sources || []).map(s => ({\n  url: s.url || '',\n  title: s.title || '',\n  source_type: s.source_type || 'web',\n  tier: s.tier || 'T3',\n  finding: s.finding || '',\n  platform: s.platform || ''\n}));\n\nconst sourcesPath = `${exportDir}/sources.json`;\nfs.writeFileSync(sourcesPath, JSON.stringify({\n  query: params.query,\n  mode: params.mode,\n  run_id: runId,\n  verdict: data.verdict || null,\n  quality_score: data.quality_score || 0,\n  sources: sources,\n  export_date: new Date().toISOString()\n}, null, 2));\n\n// 3. Claims JSON\nconst claims = (claimsData.claims || []).map(c => ({\n  text: c.text || '',\n  confidence: c.confidence || 0.5,\n  source_urls: c.source_urls || []\n}));\n\nconst claimsPath = `${exportDir}/claims.json`;\nfs.writeFileSync(claimsPath, JSON.stringify({ claims }, null, 2));\n\ndata.notebooklm_export_path = exportDir;\ndata.notebooklm_files = [mdPath, sourcesPath, claimsPath];\ndata.notebooklm_exported = true;\n\nreturn [{ json: data }];"
+      }
+    },
+    {
+      "id": "flash-if-mode",
+      "name": "IF Flash Mode?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        500,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "flash-condition",
+              "leftValue": "={{ $json.mode }}",
+              "rightValue": "flash",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "flash-brave-search",
+      "name": "Flash: Brave Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst params = $('Set Parameters').first().json;\nconst query = params.query;\nconst braveKey = $env.BRAVE_SEARCH_API_KEY || $env.BRAVE_API_KEY || '';\n\nlet results = [];\nif (braveKey) {\n  try {\n    const encoded = encodeURIComponent(query);\n    const raw = execSync(\n      `curl -s -H \"X-Subscription-Token: ${braveKey}\" \"https://api.search.brave.com/res/v1/web/search?q=${encoded}&count=5\"`,\n      { encoding: 'utf-8', timeout: 10000 }\n    );\n    const data = JSON.parse(raw);\n    results = (data.web?.results || []).slice(0, 5).map(r => ({\n      title: r.title,\n      url: r.url,\n      snippet: r.description || ''\n    }));\n  } catch(e) {\n    results = [{ title: 'Search error', url: '', snippet: e.message }];\n  }\n}\n\nreturn [{ json: { query, results, run_id: params.run_id, trigger_source: params.trigger_source, callback_webhook: params.callback_webhook } }];"
+      }
+    },
+    {
+      "id": "flash-deliver",
+      "name": "Flash: Format & Deliver",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst data = $input.first().json;\nconst query = data.query;\nconst results = data.results || [];\nconst triggerSource = data.trigger_source;\nconst callbackWebhook = data.callback_webhook;\n\n// Format as plain bullet list\nconst bullets = results.map((r, i) => `${i+1}. *${r.title}*\\n   ${r.url}\\n   ${r.snippet}`).join('\\n\\n');\nconst message = `⚡ *Flash: ${query}*\\n\\n${bullets || 'No results found.'}`;\n\n// Deliver: agent callback OR Telegram\nif (callbackWebhook && (triggerSource === 'openclaw' || triggerSource === 'hive')) {\n  try {\n    execSync(`curl -s -X POST \"${callbackWebhook}\" -H \"Content-Type: application/json\" -d '${JSON.stringify({ run_id: data.run_id, status: 'done', mode: 'flash', report: message, results })}' `, { timeout: 5000 });\n  } catch(e) { /* ignore delivery errors */ }\n} else {\n  const botToken = $env.RESEARCH_BOT_TOKEN || '';\n  const userId = data.user_id || '';\n  const userChatIds = {\n    'nico': $env.TELEGRAM_CHAT_ID_NICO || $env.TELEGRAM_CHAT_ID || '',\n    'sabine': $env.TELEGRAM_CHAT_ID_SABINE || '',\n  };\n  const isSystemRun = !userId || ['hive', 'schedule'].includes(triggerSource);\n  const chatId = isSystemRun ? '' : (userChatIds[userId] || $env.TELEGRAM_CHAT_ID || '');\n  if (botToken && chatId && !isSystemRun) {\n    const payload = JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'Markdown', disable_web_page_preview: true });\n    execSync(`curl -s -X POST \"https://api.telegram.org/bot${botToken}/sendMessage\" -H \"Content-Type: application/json\" -d '${payload}'`, { timeout: 8000 });\n  }\n}\n\nreturn [{ json: { run_id: data.run_id, status: 'done', mode: 'flash', delivered: true } }];"
+      }
+    },
+    {
+      "id": "hitl-if-agent",
+      "name": "HITL: IF Agent Trigger?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        6200,
+        600
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-source",
+              "leftValue": "={{ $('Set Parameters').first().json.trigger_source }}",
+              "rightValue": "openclaw",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or",
+          "secondConditions": [
+            {
+              "id": "cond-source-hive",
+              "leftValue": "={{ $('Set Parameters').first().json.trigger_source }}",
+              "rightValue": "hive",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "hitl-agent-callback",
+      "name": "HITL: Agent Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6500,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\nconst params = $('Set Parameters').first().json;\nconst telegramData = $('D: Prepare Telegram Message').first().json;\n\nconst callbackWebhook = params.callback_webhook || '';\nconst runId = params.run_id;\n\n// Strukturierte Completion-Antwort an aufrufendes System\nif (callbackWebhook) {\n  let reportData = {};\n  try {\n    const report = $('P4: Post-Process Report').first().json;\n    reportData = {\n      title: report.title || 'Research Report',\n      summary: (report.report_markdown || '').substring(0, 500),\n      verdict: report.verdict || null,\n      quality_score: report.quality_score || 0,\n      source_count: report.source_count || 0,\n      claim_count: report.claim_count || 0,\n      synthesis_engine: report.synthesis_engine || 'unknown',\n    };\n  } catch(e) { /* P4 nicht verfuegbar bei flash */ }\n\n  const payload = JSON.stringify({\n    run_id: runId,\n    status: 'completed',\n    type: 'research_result',\n    triggered_by: params.user_id || '',\n    mode: params.mode,\n    trigger_source: params.trigger_source,\n    report: reportData,\n    portal_url: `http://localhost:3000/research/runs/${runId}`,\n  });\n  try {\n    execSync(`curl -s -X POST \"${callbackWebhook}\" -H \"Content-Type: application/json\" -d '${payload}'`, { timeout: 10000 });\n  } catch(e) { /* log but don't fail */ }\n}\n\nreturn [{ json: { run_id: runId, callback_sent: true, callback_webhook: callbackWebhook } }];\n"
+      }
+    },
+    {
+      "id": "d-if-send-telegram",
+      "name": "D: IF Send Telegram?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        7300,
+        600
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-should-telegram",
+              "leftValue": "={{ $(\"D: Prepare Telegram Message\").first().json.should_send_telegram }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "d-if-send-callback",
+      "name": "D: IF Send Callback?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        7300,
+        900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-should-callback",
+              "leftValue": "={{ $(\"D: Prepare Telegram Message\").first().json.should_callback }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Parameters": {
+      "main": [
+        [
+          {
+            "node": "IF Flash Mode?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SurrealDB CREATE research_run": {
+      "main": [
+        [
+          {
+            "node": "P0: Gemini Query Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P0: Gemini Query Plan": {
+      "main": [
+        [
+          {
+            "node": "P0: Parse Search Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P0: Parse Search Plan": {
+      "main": [
+        [
+          {
+            "node": "SurrealDB UPDATE search_plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SurrealDB UPDATE search_plan": {
+      "main": [
+        [
+          {
+            "node": "P1: KB Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "P1: Web Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "P1: MiniFlux RSS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "P1: Gemini Deep Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "P1: Academic Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "P1: Social Search (Grok)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "P1: You.com Deep Research",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "P1: Exa Neural Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Cache: Check Similar Queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P1: KB Search": {
+      "main": [
+        [
+          {
+            "node": "P1: Merge All Branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P1: Web Search": {
+      "main": [
+        [
+          {
+            "node": "P1: Merge All Branches",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "P1: MiniFlux RSS": {
+      "main": [
+        [
+          {
+            "node": "P1: Merge All Branches",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "P1: Gemini Deep Search": {
+      "main": [
+        [
+          {
+            "node": "P1: Merge All Branches",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "P1: Academic Search": {
+      "main": [
+        [
+          {
+            "node": "P1: Merge All Branches",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "P1: Social Search (Grok)": {
+      "main": [
+        [
+          {
+            "node": "P1: Merge All Branches",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "P1: You.com Deep Research": {
+      "main": [
+        [
+          {
+            "node": "P1: Merge All Branches",
+            "type": "main",
+            "index": 6
+          }
+        ]
+      ]
+    },
+    "P1: Exa Neural Search": {
+      "main": [
+        [
+          {
+            "node": "P1: Merge All Branches",
+            "type": "main",
+            "index": 7
+          }
+        ]
+      ]
+    },
+    "P1: Merge All Branches": {
+      "main": [
+        [
+          {
+            "node": "P1: Deduplicate Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P1: Deduplicate Sources": {
+      "main": [
+        [
+          {
+            "node": "P1: Extract Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P1: Extract Claims": {
+      "main": [
+        [
+          {
+            "node": "Gate 1: Source Sufficiency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate 1: Source Sufficiency": {
+      "main": [
+        [
+          {
+            "node": "P2: IF Mode = deep?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P2: IF Mode = deep?": {
+      "main": [
+        [
+          {
+            "node": "P2: Devil's Advocate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SurrealDB UPDATE status=phase4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P2: Devil's Advocate": {
+      "main": [
+        [
+          {
+            "node": "P2: Counter-Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P2: Counter-Search": {
+      "main": [
+        [
+          {
+            "node": "P2: Gate 2 Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P2: Gate 2 Check": {
+      "main": [
+        [
+          {
+            "node": "SurrealDB UPDATE status=phase4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SurrealDB UPDATE status=phase4": {
+      "main": [
+        [
+          {
+            "node": "P4: Prepare Synthesis Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P4: Prepare Synthesis Context": {
+      "main": [
+        [
+          {
+            "node": "P4: IF Mode = deep?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P4: IF Mode = deep?": {
+      "main": [
+        [
+          {
+            "node": "P4: Claude CLI Synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "P4: Gemini CLI Synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P4: Claude CLI Synthesis": {
+      "main": [
+        [
+          {
+            "node": "P4: Post-Process Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P4: Gemini CLI Synthesis": {
+      "main": [
+        [
+          {
+            "node": "P4: Post-Process Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P4: Post-Process Report": {
+      "main": [
+        [
+          {
+            "node": "P3: IF not quick?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "D: PDF Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P3: IF not quick?": {
+      "main": [
+        [
+          {
+            "node": "P3: Verification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "D: Prepare Telegram Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P3: Verification": {
+      "main": [
+        [
+          {
+            "node": "P3: Gate 3 Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P3: Gate 3 Check": {
+      "main": [
+        [
+          {
+            "node": "Retry: IF Gate3 Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry: IF Gate3 Failed?": {
+      "main": [
+        [
+          {
+            "node": "Retry: SurrealDB Mark Failed Phase",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "D: Prepare Telegram Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry: SurrealDB Mark Failed Phase": {
+      "main": [
+        [
+          {
+            "node": "Retry: Telegram Gate Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "D: Prepare Telegram Message": {
+      "main": [
+        [
+          {
+            "node": "D: SurrealDB Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "D: Telegram Send Report": {
+      "main": [
+        [
+          {
+            "node": "D: Telegram Feedback Buttons",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "D: SurrealDB Persist": {
+      "main": [
+        [
+          {
+            "node": "D: SurrealDB Execute Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "D: SurrealDB Execute Persist": {
+      "main": [
+        [
+          {
+            "node": "D: Reputation Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "D: Reputation Update": {
+      "main": [
+        [
+          {
+            "node": "D: Reputation Execute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "D: Reputation Execute": {
+      "main": [
+        [
+          {
+            "node": "D: KB-Writeback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "D: KB-Writeback": {
+      "main": [
+        [
+          {
+            "node": "D: KB-Writeback Execute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "D: KB-Writeback Execute": {
+      "main": [
+        [
+          {
+            "node": "D: IF Send Telegram?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "D: IF Send Callback?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "D: PDF Export": {
+      "main": [
+        [
+          {
+            "node": "D: Google Drive Archive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "D: Google Drive Archive": {
+      "main": [
+        [
+          {
+            "node": "D: NotebookLM Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Flash Mode?": {
+      "main": [
+        [
+          {
+            "node": "Flash: Brave Search",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SurrealDB CREATE research_run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flash: Brave Search": {
+      "main": [
+        [
+          {
+            "node": "Flash: Format & Deliver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "D: IF Send Telegram?": {
+      "main": [
+        [
+          {
+            "node": "D: Telegram Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "D: IF Send Callback?": {
+      "main": [
+        [
+          {
+            "node": "HITL: Agent Callback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "id": "69QGdrWQneaaph5Z"
+}

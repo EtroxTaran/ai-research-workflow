@@ -1,0 +1,953 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:52.015Z",
+    "id": "gMm8bKjFy722Q0kb",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Gate Evaluator",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "gate-evaluator",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "hive-gate-evaluator-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "gate-evaluator"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": ""
+            },
+            "conditions": [
+              {
+                "id": "cond-gate-id",
+                "leftValue": "={{ $json.body.gateId }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "isNotEmpty"
+                }
+              },
+              {
+                "id": "cond-project-id",
+                "leftValue": "={{ $json.body.projectId }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "isNotEmpty"
+                }
+              },
+              {
+                "id": "cond-run-id",
+                "leftValue": "={{ $json.body.runId }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "isNotEmpty"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "validate-input",
+        "name": "Validate Input",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Auto-converted from Set v3 (n8n 2.15.x SetV2 node crashes at SetV2.node.ts:352)\nreturn [{ json: {\n  \"workflow\": \"hive-gate-evaluator\",\n  \"status\": \"error\",\n  \"error\": \"Missing required fields: gateId, projectId, and runId are all required\",\n  \"success\": false\n} }];"
+        },
+        "id": "validation-error",
+        "name": "Validation Error",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          260,
+          400
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json) }}",
+          "options": {
+            "responseCode": 400
+          }
+        },
+        "id": "respond-validation-error",
+        "name": "Respond Validation Error",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          520,
+          400
+        ]
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues/{{ $json.body.projectId }}",
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          }
+        },
+        "id": "fetch-project",
+        "name": "Fetch Project",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "rules": {
+            "values": [
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $('Webhook Trigger').first().json.body.gateId }}",
+                      "rightValue": "G0",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "G0"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $('Webhook Trigger').first().json.body.gateId }}",
+                      "rightValue": "G1",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "G1"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $('Webhook Trigger').first().json.body.gateId }}",
+                      "rightValue": "G1.5",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "G1.5"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $('Webhook Trigger').first().json.body.gateId }}",
+                      "rightValue": "G2",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "G2"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $('Webhook Trigger').first().json.body.gateId }}",
+                      "rightValue": "G3",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "G3"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $('Webhook Trigger').first().json.body.gateId }}",
+                      "rightValue": "G4",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "G4"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $('Webhook Trigger').first().json.body.gateId }}",
+                      "rightValue": "G5",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "G5"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $('Webhook Trigger').first().json.body.gateId }}",
+                      "rightValue": "G6",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "G6"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $('Webhook Trigger').first().json.body.gateId }}",
+                      "rightValue": "G7",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "G7"
+              }
+            ]
+          },
+          "options": {
+            "fallbackOutput": "extra"
+          }
+        },
+        "id": "gate-switch",
+        "name": "Gate Switch",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 3,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const project = $('Fetch Project').first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst meta = project.metadata || {};\nconst ev = meta.evidence || {};\n\nconst criteria = {\n  brief_clarity: (ev.brief_clarity_score || 0) >= 7.0,\n  feasibility_confirmed: !!ev.feasibility_note,\n  no_conflicts: ev.conflict_check !== false,\n  complexity_estimated: ['small', 'medium', 'large'].includes(ev.estimated_complexity)\n};\n\nconst passed = Object.values(criteria).every(Boolean);\nconst failed = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);\n\nreturn [{\n  json: {\n    gateId: 'G0',\n    projectId: body.projectId,\n    runId: body.runId,\n    passed,\n    criteria,\n    confidence: passed ? 85 : 40,\n    reasoning: passed\n      ? 'Intake criteria met: brief is clear, feasible, no conflicts'\n      : 'Intake criteria not met: ' + failed.join(', ')\n  }\n}];"
+        },
+        "id": "evaluate-g0",
+        "name": "Evaluate G0",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          -800
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const project = $('Fetch Project').first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst meta = project.metadata || {};\nconst ev = meta.evidence || {};\n\nconst criteria = {\n  pvd_exists: !!ev.pvd_url,\n  vera_signoff: ev.vera_signoff === true,\n  sage_challenge_resolved: ev.sage_challenge_resolved === true,\n  min_three_options: (ev.user_stories_count || 0) >= 3,\n  acceptance_criteria: ev.acceptance_criteria_defined === true,\n  zara_survivors: (ev.zara_survivors_count || 0) >= 1,\n  qas_count: (ev.qas_count || 0) >= 3,\n  three_amigos_signoff: ev.three_amigos_signoff === true\n};\n\nconst passed = Object.values(criteria).every(Boolean);\nconst failed = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);\n\nreturn [{\n  json: {\n    gateId: 'G1',\n    projectId: body.projectId,\n    runId: body.runId,\n    passed,\n    criteria,\n    confidence: passed ? 88 : 35,\n    reasoning: passed\n      ? 'Product research complete: PVD approved, options analyzed, Zara survivors present'\n      : 'Product research incomplete: ' + failed.join(', ')\n  }\n}];"
+        },
+        "id": "evaluate-g1",
+        "name": "Evaluate G1",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          -600
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const project = $('Fetch Project').first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst meta = project.metadata || {};\nconst ev = meta.evidence || {};\n\nconst criteria = {\n  design_package_exists: !!ev.design_package_id,\n  wireframes_present: (ev.wireframe_count || 0) > 0,\n  components_catalogued: (ev.component_count || 0) > 0,\n  api_shape_hints: ev.api_shape_hints === true,\n  accessibility_pass: ev.accessibility_pass === true,\n  sage_challenge_addressed: ev.sage_challenge_addressed === true,\n  nico_approved: ev.nico_approved === true\n};\n\nconst passed = Object.values(criteria).every(Boolean);\nconst failed = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);\n\nreturn [{\n  json: {\n    gateId: 'G1.5',\n    projectId: body.projectId,\n    runId: body.runId,\n    passed,\n    criteria,\n    confidence: passed ? 90 : 30,\n    reasoning: passed\n      ? 'UX design complete: wireframes, tokens, accessibility, Nico approved'\n      : 'UX design incomplete: ' + failed.join(', ')\n  }\n}];"
+        },
+        "id": "evaluate-g15",
+        "name": "Evaluate G1.5",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          -400
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const project = $('Fetch Project').first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst meta = project.metadata || {};\nconst ev = meta.evidence || {};\n\nconst criteria = {\n  adr_links_present: Array.isArray(ev.adr_links) && ev.adr_links.length > 0,\n  arc42_complete: !!ev.arc42_url,\n  argus_signoff: ev.argus_signoff === true,\n  threat_model_complete: ev.threat_model_complete === true,\n  cost_model_complete: ev.cost_model_complete === true,\n  usability_assessment: ev.usability_assessment_complete === true,\n  technology_stack_approved: ev.technology_stack_approved === true\n};\n\nconst passed = Object.values(criteria).every(Boolean);\nconst failed = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);\n\nreturn [{\n  json: {\n    gateId: 'G2',\n    projectId: body.projectId,\n    runId: body.runId,\n    passed,\n    criteria,\n    confidence: passed ? 92 : 30,\n    reasoning: passed\n      ? 'Architecture approved: ADRs, ARC42, threat model, Argus signoff all present'\n      : 'Architecture incomplete: ' + failed.join(', ')\n  }\n}];"
+        },
+        "id": "evaluate-g2",
+        "name": "Evaluate G2",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          -200
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const project = $('Fetch Project').first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst meta = project.metadata || {};\nconst ev = meta.evidence || {};\n\nconst criteria = {\n  agents_ready: (ev.agents_ready || 0) > 0,\n  no_blocked_agents: (ev.agents_blocked || 0) === 0,\n  toolbelts_validated: ev.toolbelts_validated === true,\n  nova_preflight_pass: ev.nova_preflight_pass === true,\n  aria_signoff: ev.aria_signoff === true,\n  no_gap_capabilities: !Array.isArray(ev.gap_capabilities) || ev.gap_capabilities.length === 0\n};\n\nconst passed = Object.values(criteria).every(Boolean);\nconst failed = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);\n\nreturn [{\n  json: {\n    gateId: 'G3',\n    projectId: body.projectId,\n    runId: body.runId,\n    passed,\n    criteria,\n    confidence: passed ? 87 : 42,\n    reasoning: passed\n      ? 'Team ready: all agents operational, toolbelts validated, no skill gaps'\n      : 'Team not ready: ' + failed.join(', ')\n  }\n}];"
+        },
+        "id": "evaluate-g3",
+        "name": "Evaluate G3",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const project = $('Fetch Project').first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst meta = project.metadata || {};\nconst ev = meta.evidence || {};\n\nconst criteria = {\n  tasks_created: (ev.total_tasks || 0) > 0,\n  one_shot_compliant: ev.one_shot_compliant === true,\n  avg_ac_sufficient: (ev.avg_acceptance_criteria || 0) >= 2.0,\n  all_testable: ev.all_tasks_testable === true,\n  acyclic_dependencies: ev.dependency_graph_acyclic === true,\n  all_assigned: ev.all_tasks_assigned === true,\n  all_seeded: ev.all_tasks_seeded === true\n};\n\nconst passed = Object.values(criteria).every(Boolean);\nconst failed = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);\n\nreturn [{\n  json: {\n    gateId: 'G4',\n    projectId: body.projectId,\n    runId: body.runId,\n    passed,\n    criteria,\n    confidence: passed ? 90 : 38,\n    reasoning: passed\n      ? 'Tasks properly sized: ONE-SHOT compliant, testable, assigned, seeded'\n      : 'Task breakdown incomplete: ' + failed.join(', ')\n  }\n}];"
+        },
+        "id": "evaluate-g4",
+        "name": "Evaluate G4",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          200
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const project = $('Fetch Project').first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst meta = project.metadata || {};\nconst ev = meta.evidence || {};\n\nconst criteria = {\n  tdd_verified: ev.tdd_verified === true,\n  dual_cli_consensus: (ev.dual_cli_consensus || 0) >= 0.75,\n  tests_green: ev.tests_green === true,\n  code_review_complete: ev.code_review_complete === true,\n  conventional_commit: ev.conventional_commit === true,\n  security_scan_clean: ev.security_scan_clean === true\n};\n\nconst passed = Object.values(criteria).every(Boolean);\nconst failed = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);\n\nreturn [{\n  json: {\n    gateId: 'G5',\n    projectId: body.projectId,\n    runId: body.runId,\n    passed,\n    criteria,\n    confidence: passed ? 86 : 35,\n    reasoning: passed\n      ? 'Task complete: TDD verified, dual-CLI consensus >= 75%, tests green, security clean'\n      : 'Task incomplete: ' + failed.join(', ')\n  }\n}];"
+        },
+        "id": "evaluate-g5",
+        "name": "Evaluate G5",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          400
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const project = $('Fetch Project').first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst meta = project.metadata || {};\nconst ev = meta.evidence || {};\n\nconst criteria = {\n  e2e_test_pass: ev.e2e_test_pass === true,\n  cross_browser_pass: ev.cross_browser_pass === true,\n  api_contract_valid: ev.api_contract_valid === true,\n  performance_budget_met: ev.performance_budget_met === true,\n  security_scan_clean: ev.security_scan_clean === true,\n  documentation_current: ev.documentation_current === true,\n  documentation_single_source_compliant: ev.documentation_single_source_compliant === true,\n  documentation_no_active_duplicates: ev.documentation_no_active_duplicates === true,\n  documentation_conflicts_resolved: ev.documentation_conflicts_resolved === true,\n  documentation_last_reviewed_at_present: typeof ev.documentation_last_reviewed_at === 'string' && ev.documentation_last_reviewed_at.length > 0,\n  documentation_owner_present: typeof ev.documentation_owner === 'string' && ev.documentation_owner.length > 0,\n  documentation_audit_pack_ref_present: typeof ev.documentation_audit_pack_ref === 'string' && ev.documentation_audit_pack_ref.length > 0\n};\n\nconst passed = Object.values(criteria).every(Boolean);\nconst failed = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);\n\nreturn [{\n  json: {\n    gateId: 'G6',\n    projectId: body.projectId,\n    runId: body.runId,\n    passed,\n    criteria,\n    confidence: passed ? 91 : 32,\n    reasoning: passed\n      ? 'Feature complete: quality checks passed and documentation contract is fully satisfied'\n      : 'Feature incomplete: ' + failed.join(', ')\n  }\n}];"
+        },
+        "id": "evaluate-g6",
+        "name": "Evaluate G6",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          600
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const project = $('Fetch Project').first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst meta = project.metadata || {};\nconst ev = meta.evidence || {};\n\nconst criteria = {\n  all_prior_gates_pass: ev.all_prior_gates_pass === true,\n  e2e_suite_pass: ev.e2e_suite_pass === true,\n  slo_check: ev.slo_check === true,\n  deployment_approved: ev.deployment_approved === true,\n  changelog_written: ev.changelog_written === true,\n  rollback_plan_documented: ev.rollback_plan_documented === true,\n  monitoring_active: ev.monitoring_active === true,\n  documentation_final_signoff: ev.documentation_final_signoff === true,\n  documentation_single_source_compliant: ev.documentation_single_source_compliant === true,\n  documentation_audit_pack_ref_present: typeof ev.documentation_audit_pack_ref === 'string' && ev.documentation_audit_pack_ref.length > 0\n};\n\nconst passed = Object.values(criteria).every(Boolean);\nconst failed = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);\n\nreturn [{\n  json: {\n    gateId: 'G7',\n    projectId: body.projectId,\n    runId: body.runId,\n    passed,\n    criteria,\n    confidence: passed ? 95 : 25,\n    reasoning: passed\n      ? 'Production go: all gates passed and final documentation signoff is complete'\n      : 'Production blocked: ' + failed.join(', ')\n  }\n}];"
+        },
+        "id": "evaluate-g7",
+        "name": "Evaluate G7",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          800
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Auto-converted from Set v3 (n8n 2.15.x SetV2 node crashes at SetV2.node.ts:352)\nreturn [{ json: {\n  \"workflow\": \"hive-gate-evaluator\",\n  \"status\": \"error\",\n  \"error\": 'Unknown gate ID: ' + $('Webhook Trigger').first().json.body.gateId,\n  \"success\": false\n} }];"
+        },
+        "id": "unknown-gate-error",
+        "name": "Unknown Gate Error",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          1000
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json) }}",
+          "options": {
+            "responseCode": 400
+          }
+        },
+        "id": "respond-unknown-gate",
+        "name": "Respond Unknown Gate",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1300,
+          1000
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const evalResult = $input.first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst now = new Date().toISOString();\n\nreturn [{\n  json: {\n    ...evalResult,\n    trace_id: `gate-${evalResult.gateId}-${body.runId}`,\n    run_id: body.runId,\n    project_id: body.projectId,\n    issue_id: body.projectId,\n    agent: 'gate-evaluator',\n    status: evalResult.passed ? 'PASS' : 'FAIL',\n    started_at: $('Webhook Trigger').first().json.headers?.['x-request-start'] || now,\n    completed_at: now,\n    latency_ms: Date.now() - new Date($('Webhook Trigger').first().json.headers?.['x-request-start'] || now).getTime(),\n    error_code: evalResult.passed ? null : 'GATE_CRITERIA_NOT_MET',\n    evidence_ref: `evidence/${evalResult.gateId}/${body.projectId}/${body.runId}`\n  }\n}];"
+        },
+        "id": "build-evidence",
+        "name": "Build Evidence",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": ""
+            },
+            "conditions": [
+              {
+                "id": "cond-hitl",
+                "leftValue": "={{ ['G0', 'G1.5', 'G2', 'G4', 'G6', 'G7'].includes($json.gateId) }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "check-hitl",
+        "name": "Check HITL Required",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1560,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues",
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "title",
+                "value": "={{ '[HITL] Gate ' + $json.gateId + ' approval required for project ' + $json.project_id }}"
+              },
+              {
+                "name": "description",
+                "value": "={{ 'Gate ' + $json.gateId + ' evaluation ' + $json.status + ' with confidence ' + $json.confidence + '%. Reasoning: ' + $json.reasoning + '. Evidence ref: ' + $json.evidence_ref }}"
+              },
+              {
+                "name": "priority",
+                "value": "high"
+              },
+              {
+                "name": "labels",
+                "value": "hitl,gate-approval,={{ $json.gateId }}"
+              }
+            ]
+          },
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "create-approval-ticket",
+        "name": "Create Approval Ticket",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1820,
+          -200
+        ]
+      },
+      {
+        "parameters": {},
+        "id": "no-hitl",
+        "name": "No HITL Required",
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [
+          1820,
+          200
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const evidence = $('Build Evidence').first().json;\nconst hitlGates = ['G0', 'G1.5', 'G2', 'G4', 'G6', 'G7'];\nconst hitlRequired = hitlGates.includes(evidence.gateId);\n\nlet approvalTicketId = null;\ntry {\n  const ticketResponse = $('Create Approval Ticket').first().json;\n  approvalTicketId = ticketResponse.id || ticketResponse.issueId || null;\n} catch (e) {\n  approvalTicketId = null;\n}\n\nreturn [{\n  json: {\n    workflow: 'hive-gate-evaluator',\n    endpoint: 'gate-evaluator',\n    kind: 'deterministic',\n    status: evidence.passed ? 'completed' : 'failed',\n    receivedAt: evidence.started_at,\n    completedAt: evidence.completed_at,\n    timeoutMs: 30000,\n    success: true,\n    passed: evidence.passed,\n    gateId: evidence.gateId,\n    projectId: evidence.project_id,\n    runId: evidence.run_id,\n    confidence: evidence.confidence,\n    reasoning: evidence.reasoning,\n    criteria: evidence.criteria,\n    evidence: {\n      trace_id: evidence.trace_id,\n      evidence_ref: evidence.evidence_ref,\n      latency_ms: evidence.latency_ms\n    },\n    hitlRequired,\n    approvalTicketId\n  }\n}];"
+        },
+        "id": "hive-gate-evaluator-set",
+        "name": "Build Backbone Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2080,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json) }}",
+          "options": {}
+        },
+        "id": "hive-gate-evaluator-response",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          2340,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Validate Input",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Validate Input": {
+        "main": [
+          [
+            {
+              "node": "Fetch Project",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Validation Error",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Validation Error": {
+        "main": [
+          [
+            {
+              "node": "Respond Validation Error",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Project": {
+        "main": [
+          [
+            {
+              "node": "Gate Switch",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Gate Switch": {
+        "main": [
+          [
+            {
+              "node": "Evaluate G0",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Evaluate G1",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Evaluate G1.5",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Evaluate G2",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Evaluate G3",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Evaluate G4",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Evaluate G5",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Evaluate G6",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Evaluate G7",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Unknown Gate Error",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Evaluate G0": {
+        "main": [
+          [
+            {
+              "node": "Build Evidence",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Evaluate G1": {
+        "main": [
+          [
+            {
+              "node": "Build Evidence",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Evaluate G1.5": {
+        "main": [
+          [
+            {
+              "node": "Build Evidence",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Evaluate G2": {
+        "main": [
+          [
+            {
+              "node": "Build Evidence",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Evaluate G3": {
+        "main": [
+          [
+            {
+              "node": "Build Evidence",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Evaluate G4": {
+        "main": [
+          [
+            {
+              "node": "Build Evidence",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Evaluate G5": {
+        "main": [
+          [
+            {
+              "node": "Build Evidence",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Evaluate G6": {
+        "main": [
+          [
+            {
+              "node": "Build Evidence",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Evaluate G7": {
+        "main": [
+          [
+            {
+              "node": "Build Evidence",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Unknown Gate Error": {
+        "main": [
+          [
+            {
+              "node": "Respond Unknown Gate",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Evidence": {
+        "main": [
+          [
+            {
+              "node": "Check HITL Required",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check HITL Required": {
+        "main": [
+          [
+            {
+              "node": "Create Approval Ticket",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "No HITL Required",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Create Approval Ticket": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "No HITL Required": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Backbone Response": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "331f205c-94d2-4bb5-ae7a-1e1821797af9",
+    "activeVersionId": "331f205c-94d2-4bb5-ae7a-1e1821797af9",
+    "versionCounter": 50,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.016Z",
+        "createdAt": "2026-04-07T20:39:52.016Z",
+        "role": "workflow:owner",
+        "workflowId": "gMm8bKjFy722Q0kb",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

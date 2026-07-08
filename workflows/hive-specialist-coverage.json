@@ -1,0 +1,226 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:52.043Z",
+    "id": "siTpZ5GJ1eIY0WAN",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Specialist Coverage",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "specialist-coverage",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "scc-001-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "specialist-coverage"
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/agents",
+          "options": {
+            "timeout": 15000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          }
+        },
+        "id": "scc-002-fetch-agents",
+        "name": "Fetch Agents",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const webhookData = $('Webhook Trigger').first().json;\nconst body = webhookData.body || webhookData;\nconst { projectId, requiredSkills } = body;\n\nconst agentResponse = $('Fetch Agents').first().json;\nconst agents = Array.isArray(agentResponse) ? agentResponse : (agentResponse.data || agentResponse.agents || []);\n\nconst skillList = Array.isArray(requiredSkills) ? requiredSkills : [];\n\nconst agentSkillMap = {};\nagents.forEach(agent => {\n  const name = agent.name || agent.id;\n  const skills = agent.skills || agent.capabilities || [];\n  agentSkillMap[name] = {\n    skills: Array.isArray(skills) ? skills.map(s => typeof s === 'string' ? s : s.name || s.id) : [],\n    tier: agent.tier || 'T3',\n    status: agent.status || 'available',\n    adapterType: agent.adapterType || 'unknown'\n  };\n});\n\nconst coverage = skillList.map(requiredSkill => {\n  const normalizedSkill = requiredSkill.toLowerCase().trim();\n  const matchingAgents = [];\n\n  Object.entries(agentSkillMap).forEach(([agentName, agentInfo]) => {\n    const hasSkill = agentInfo.skills.some(s => {\n      const normalizedAgentSkill = s.toLowerCase().trim();\n      return normalizedAgentSkill === normalizedSkill ||\n             normalizedAgentSkill.includes(normalizedSkill) ||\n             normalizedSkill.includes(normalizedAgentSkill);\n    });\n\n    if (hasSkill) {\n      matchingAgents.push({\n        agent: agentName,\n        tier: agentInfo.tier,\n        status: agentInfo.status,\n        adapterType: agentInfo.adapterType\n      });\n    }\n  });\n\n  return {\n    skill: requiredSkill,\n    covered: matchingAgents.length > 0,\n    agentCount: matchingAgents.length,\n    agents: matchingAgents,\n    redundancy: matchingAgents.length > 1 ? 'adequate' : matchingAgents.length === 1 ? 'single-point' : 'none'\n  };\n});\n\nconst coveredCount = coverage.filter(c => c.covered).length;\nconst coveragePercent = skillList.length > 0\n  ? Math.round((coveredCount / skillList.length) * 100)\n  : 100;\n\nreturn [{\n  json: {\n    projectId,\n    requiredSkills: skillList,\n    totalAgents: agents.length,\n    coverage,\n    coveragePercent\n  }\n}];"
+        },
+        "id": "scc-003-analyze",
+        "name": "Analyze Coverage",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const data = $json;\nconst { projectId, coverage, coveragePercent } = data;\n\nconst gaps = coverage\n  .filter(c => !c.covered)\n  .map(c => ({\n    skill: c.skill,\n    severity: 'high',\n    impact: 'No agent available to handle ' + c.skill + ' tasks'\n  }));\n\nconst singlePoints = coverage\n  .filter(c => c.redundancy === 'single-point')\n  .map(c => ({\n    skill: c.skill,\n    agent: c.agents[0].agent,\n    severity: 'medium',\n    impact: 'Only ' + c.agents[0].agent + ' covers ' + c.skill + ' \u2014 bus factor of 1'\n  }));\n\nconst recommendations = [];\n\ngaps.forEach(gap => {\n  recommendations.push({\n    type: 'create-specialist',\n    priority: 'high',\n    skill: gap.skill,\n    action: 'Create a new T3 ephemeral specialist with ' + gap.skill + ' capability via Aria',\n    rationale: 'No existing agent covers this required skill'\n  });\n});\n\nsinglePoints.forEach(sp => {\n  recommendations.push({\n    type: 'add-redundancy',\n    priority: 'medium',\n    skill: sp.skill,\n    action: 'Train or create a second agent with ' + sp.skill + ' capability',\n    rationale: 'Single point of failure \u2014 if ' + sp.agent + ' is unavailable, ' + sp.skill + ' tasks will block'\n  });\n});\n\nif (coveragePercent < 80) {\n  recommendations.push({\n    type: 'coverage-alert',\n    priority: 'critical',\n    action: 'Overall coverage is ' + coveragePercent + '% \u2014 urgent specialist recruitment needed',\n    rationale: 'Project may stall due to insufficient skill coverage'\n  });\n}\n\nreturn [{\n  json: {\n    projectId,\n    coverage: data.coverage,\n    gaps,\n    singlePoints,\n    recommendations,\n    summary: {\n      totalRequired: data.requiredSkills.length,\n      covered: data.coverage.filter(c => c.covered).length,\n      uncovered: gaps.length,\n      singlePointRisks: singlePoints.length,\n      coveragePercent,\n      totalAgents: data.totalAgents,\n      recommendationCount: recommendations.length\n    },\n    completedAt: new Date().toISOString()\n  }\n}];"
+        },
+        "id": "scc-004-gaps",
+        "name": "Identify Gaps",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ workflow: 'specialist-coverage-check', projectId: $json.projectId, result: { coverage: $json.coverage, gaps: $json.gaps, recommendations: $json.recommendations, summary: $json.summary }, completedAt: $json.completedAt }) }}",
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "scc-005-post",
+        "name": "Post Results",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1040,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ success: true, workflow: 'specialist-coverage-check', coverage: $('Identify Gaps').first().json.coverage, gaps: $('Identify Gaps').first().json.gaps, recommendations: $('Identify Gaps').first().json.recommendations, summary: $('Identify Gaps').first().json.summary, completedAt: $('Identify Gaps').first().json.completedAt }) }}",
+          "options": {}
+        },
+        "id": "scc-006-respond",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1300,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Fetch Agents",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Agents": {
+        "main": [
+          [
+            {
+              "node": "Analyze Coverage",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Analyze Coverage": {
+        "main": [
+          [
+            {
+              "node": "Identify Gaps",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Identify Gaps": {
+        "main": [
+          [
+            {
+              "node": "Post Results",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Post Results": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "559bf8dd-cfc2-45a2-ade9-350967638503",
+    "activeVersionId": "559bf8dd-cfc2-45a2-ade9-350967638503",
+    "versionCounter": 49,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.045Z",
+        "createdAt": "2026-04-07T20:39:52.045Z",
+        "role": "workflow:owner",
+        "workflowId": "siTpZ5GJ1eIY0WAN",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

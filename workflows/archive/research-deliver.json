@@ -1,0 +1,265 @@
+{
+  "name": "Research Deliver \u2014 Telegram + SurrealDB Persist",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-deliver",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Telegram-Nachricht formatieren\nconst input = $input.first().json;\nconst report = input.report_markdown || '';\nconst title = input.title || 'Research Report';\nconst qualityScore = input.quality_score ?? 0;\nconst confidenceScore = input.confidence_score ?? 0;\nconst sources = input.sources || [];\nconst claims = input.claims || [];\nconst runId = input.run_id || 'unknown';\nconst mode = input.mode || 'standard';\n\n// Mode Badge\nconst modeBadges = {\n  quick: '\\ud83d\\ude80 Quick',\n  standard: '\\ud83d\\udcca Standard',\n  deep: '\\ud83d\\udd2c Deep'\n};\nconst modeBadge = modeBadges[mode] || modeBadges.standard;\n\n// Executive Verdict: erste 2-3 Saetze aus dem Report\nconst plainReport = report.replace(/^#+\\s.*$/gm, '').replace(/\\n{2,}/g, '\\n').trim();\nconst sentences = plainReport.split(/(?<=[.!?])\\s+/).filter(s => s.length > 10);\nconst verdict = sentences.slice(0, 3).join(' ');\n\n// Plattformen zaehlen\nconst platforms = new Set(sources.map(s => s.origin ? s.origin.split('+')[0] : 'unknown'));\nconst verifiedClaims = claims.filter(c => c.final_status === 'verified' || c.final_status === 'supported').length;\n\n// Nachricht zusammenbauen\nlet msg = `*${title.replace(/[_*[\\]()~`>#+\\-=|{}.!]/g, '\\\\$&')}*\\n`;\nmsg += `${modeBadge}\\n\\n`;\nmsg += `*Executive Verdict:*\\n${verdict}\\n\\n`;\nmsg += `*Stats:*\\n`;\nmsg += `\\u2022 ${sources.length} sources from ${platforms.size} platforms\\n`;\nmsg += `\\u2022 ${claims.length} claims extracted, ${verifiedClaims} verified\\n`;\nmsg += `\\u2022 Quality: ${(qualityScore * 100).toFixed(0)}% | Confidence: ${(confidenceScore * 100).toFixed(0)}%\\n`;\nmsg += `\\n\\u2014 Run: \\`${runId}\\``;\n\n// Telegram 4096 char Limit\nif (msg.length > 4096) {\n  msg = msg.slice(0, 4090) + '\\n...';\n}\n\nreturn [{\n  json: {\n    formatted_message: msg,\n    run_id: runId,\n    title,\n    report_markdown: report,\n    quality_score: qualityScore,\n    confidence_score: confidenceScore,\n    sources,\n    claims,\n    mode\n  }\n}];"
+      },
+      "id": "prepare-telegram-msg",
+      "name": "Prepare Telegram Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $vars.RESEARCH_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: 827301846, text: $json.formatted_message, parse_mode: 'Markdown' }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "telegram-send-report",
+      "name": "Telegram \u2014 Send Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        600,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/sql",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "NS",
+              "value": "research"
+            },
+            {
+              "name": "DB",
+              "value": "workflow"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "text/plain"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ \nconst d = $('Prepare Telegram Message').first().json;\nconst tgResp = $json.result || $json;\nconst msgId = tgResp.message_id || tgResp.result?.message_id || null;\nconst escaped = (d.report_markdown || '').replace(/'/g, \"''\");\nconst titleEsc = (d.title || '').replace(/'/g, \"''\");\n`INSERT INTO research_report {\n  run_id: '${d.run_id}',\n  title: '${titleEsc}',\n  content_markdown: '${escaped}',\n  quality_score: ${d.quality_score},\n  confidence_score: ${d.confidence_score},\n  source_count: ${(d.sources || []).length},\n  claim_count: ${(d.claims || []).length},\n  mode: '${d.mode}',\n  telegram_message_id: ${msgId || 'NONE'},\n  delivered_at: time::now(),\n  created_at: time::now()\n};`\n}}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "surrealdb-insert-report",
+      "name": "SurrealDB \u2014 INSERT research_report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        900,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// UPSERT SQL fuer alle Sources und Claims generieren\nconst input = $('Prepare Telegram Message').first().json;\nconst surrealResp = $input.first().json;\n\n// Report-ID aus SurrealDB Response extrahieren\nconst results = surrealResp.result || surrealResp[0]?.result || [];\nconst reportRecord = Array.isArray(results) ? results[0] : results;\nconst reportId = reportRecord?.id || `research_report:${input.run_id}`;\n\nconst sources = input.sources || [];\nconst claims = input.claims || [];\nconst runId = input.run_id;\n\nconst sqlStatements = [];\n\n// Source UPSERTs\nfor (const source of sources) {\n  const urlEsc = (source.url || '').replace(/'/g, \"''\");\n  const titleEsc = (source.title || '').replace(/'/g, \"''\");\n  const snippetEsc = (source.snippet || '').slice(0, 1000).replace(/'/g, \"''\");\n  const origin = source.origin || 'unknown';\n  const tier = source.tier || 'T3';\n  const sourceType = source.source_type || 'web';\n  const relevance = source.relevance_score || 0.5;\n\n  // UPSERT source_registry: bei Konflikt auf url -> update\n  sqlStatements.push(\n    `UPSERT source_registry SET url = '${urlEsc}', title = '${titleEsc}', source_type = '${sourceType}', trust_level = 'T3', reputation = IF reputation THEN reputation ELSE 0.5 END, run_count = IF run_count THEN run_count + 1 ELSE 1 END, last_seen = time::now(), created_at = IF created_at THEN created_at ELSE time::now() END WHERE url = '${urlEsc}'`\n  );\n\n  // used_source Edge\n  sqlStatements.push(\n    `INSERT INTO used_source { in: ${reportId}, out: source_registry:[\\'${urlEsc}\\'], relevance_score: ${relevance}, tier: '${tier}', origin: '${origin}', snippet: '${snippetEsc}' }`\n  );\n}\n\n// Claim INSERTs\nfor (let i = 0; i < claims.length; i++) {\n  const claim = claims[i];\n  const textEsc = (claim.text || '').replace(/'/g, \"''\");\n  const srcUrlEsc = (claim.source_url || '').replace(/'/g, \"''\");\n  const status = claim.final_status || 'pending';\n  const confidence = claim.confidence || 0.0;\n\n  sqlStatements.push(\n    `INSERT INTO research_claim { run_id: '${runId}', report: ${reportId}, text: '${textEsc}', source_url: '${srcUrlEsc}', source_title: '${(claim.source_title || '').replace(/'/g, \"''\")}', confidence: ${confidence}, cove_status: '${claim.cove_status || 'unchecked'}', final_status: '${status}', created_at: time::now() }`\n  );\n}\n\n// Research Run als completed markieren\nsqlStatements.push(\n  `UPDATE research_run SET status = 'completed', report_id = ${reportId}, completed_at = time::now() WHERE run_id = '${runId}'`\n);\n\nconst batchSql = sqlStatements.join(';\\n');\n\nreturn [{\n  json: {\n    batch_sql: batchSql,\n    report_id: reportId,\n    run_id: runId,\n    source_count: sources.length,\n    claim_count: claims.length\n  }\n}];"
+      },
+      "id": "prepare-source-upserts",
+      "name": "Prepare Source Upserts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/sql",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "NS",
+              "value": "research"
+            },
+            {
+              "name": "DB",
+              "value": "workflow"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "text/plain"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ $json.batch_sql }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "surrealdb-upsert-sources",
+      "name": "SurrealDB \u2014 UPSERT sources + claims",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1500,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Feedback-Buttons fuer Telegram vorbereiten\nconst input = $('Prepare Source Upserts').first().json;\nconst runId = input.run_id;\nconst reportId = input.report_id;\n\nconst inlineKeyboard = {\n  inline_keyboard: [\n    [\n      { text: '\\ud83d\\udc4d', callback_data: `rate_up_${runId}` },\n      { text: '\\ud83d\\udc4e', callback_data: `rate_down_${runId}` }\n    ]\n  ]\n};\n\nreturn [{\n  json: {\n    reply_markup: inlineKeyboard,\n    run_id: runId,\n    report_id: reportId,\n    telegram_message_id: $('Telegram \\u2014 Send Report').first().json.result?.message_id || null\n  }\n}];"
+      },
+      "id": "prepare-feedback-buttons",
+      "name": "Prepare Feedback Buttons",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $vars.RESEARCH_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: 827301846, text: 'Rate this report:', reply_markup: $json.reply_markup }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "telegram-send-rating",
+      "name": "Telegram \u2014 Send Rating Buttons",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2100,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Telegram Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Telegram Message": {
+      "main": [
+        [
+          {
+            "node": "Telegram \u2014 Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram \u2014 Send Report": {
+      "main": [
+        [
+          {
+            "node": "SurrealDB \u2014 INSERT research_report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SurrealDB \u2014 INSERT research_report": {
+      "main": [
+        [
+          {
+            "node": "Prepare Source Upserts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Source Upserts": {
+      "main": [
+        [
+          {
+            "node": "SurrealDB \u2014 UPSERT sources + claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SurrealDB \u2014 UPSERT sources + claims": {
+      "main": [
+        [
+          {
+            "node": "Prepare Feedback Buttons",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Feedback Buttons": {
+      "main": [
+        [
+          {
+            "node": "Telegram \u2014 Send Rating Buttons",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "meta": {
+    "instanceId": "research-workflow-n8n"
+  },
+  "id": "deliver"
+}

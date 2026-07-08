@@ -1,0 +1,189 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:52.046Z",
+    "id": "qTtokH57tUDc24Ag",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Tech Stack Resolver",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "tech-stack-resolver",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "tsr-001-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "tech-stack-resolver"
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $input.first().json;\nconst body = input.body || input;\nconst { projectId, requirements, constraints } = body;\n\nconst reqList = Array.isArray(requirements) ? requirements : [];\nconst constraintList = Array.isArray(constraints) ? constraints : [];\n\nconst needs = {\n  frontend: false,\n  backend: false,\n  database: false,\n  auth: false,\n  realtime: false,\n  fileStorage: false,\n  search: false,\n  ml: false,\n  ci: false,\n  containerization: false\n};\n\nconst keywords = {\n  frontend: ['ui', 'frontend', 'web', 'dashboard', 'portal', 'spa', 'pwa', 'responsive', 'mobile-web'],\n  backend: ['api', 'backend', 'server', 'rest', 'graphql', 'microservice', 'service'],\n  database: ['database', 'db', 'storage', 'persistence', 'data', 'sql', 'nosql', 'cache'],\n  auth: ['auth', 'login', 'sso', 'oauth', 'jwt', 'rbac', 'permissions', 'security'],\n  realtime: ['realtime', 'websocket', 'live', 'streaming', 'push', 'notification'],\n  fileStorage: ['file', 'upload', 'blob', 'media', 'image', 'document', 'asset'],\n  search: ['search', 'fulltext', 'filter', 'index', 'elasticsearch', 'query'],\n  ml: ['ml', 'ai', 'machine-learning', 'model', 'inference', 'training', 'llm'],\n  ci: ['ci', 'cd', 'pipeline', 'deploy', 'test', 'automation', 'build'],\n  containerization: ['docker', 'container', 'kubernetes', 'k8s', 'orchestration']\n};\n\nconst allText = reqList.join(' ').toLowerCase();\nObject.entries(keywords).forEach(([category, words]) => {\n  if (words.some(w => allText.includes(w))) {\n    needs[category] = true;\n  }\n});\n\nif (!Object.values(needs).some(v => v)) {\n  needs.backend = true;\n  needs.database = true;\n}\n\nreturn [{\n  json: {\n    projectId,\n    requirements: reqList,\n    constraints: constraintList,\n    identifiedNeeds: needs,\n    activeNeeds: Object.entries(needs).filter(([,v]) => v).map(([k]) => k)\n  }\n}];"
+        },
+        "id": "tsr-002-analyze",
+        "name": "Analyze Requirements",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const data = $json;\nconst { projectId, constraints, identifiedNeeds, activeNeeds } = data;\n\nconst constraintSet = new Set((constraints || []).map(c => c.toLowerCase()));\n\nconst catalog = {\n  frontend: [\n    { name: 'React 19', category: 'frontend', rationale: 'Mature ecosystem, large community, Server Components support', fit: 9 },\n    { name: 'Next.js 15', category: 'frontend', rationale: 'Full-stack React framework with SSR/SSG and API routes', fit: 8 },\n    { name: 'Tailwind CSS v4', category: 'styling', rationale: 'Utility-first CSS, rapid prototyping, consistent design system', fit: 9 }\n  ],\n  backend: [\n    { name: 'Node.js + Express 5', category: 'backend', rationale: 'Fast development, TypeScript native, large package ecosystem', fit: 8 },\n    { name: 'Fastify', category: 'backend', rationale: 'High-performance Node.js framework with schema validation', fit: 7 }\n  ],\n  database: [\n    { name: 'PostgreSQL 17', category: 'database', rationale: 'ACID-compliant, JSON support, excellent for structured data', fit: 9 },\n    { name: 'Drizzle ORM', category: 'orm', rationale: 'Type-safe, lightweight, SQL-first ORM for TypeScript', fit: 8 }\n  ],\n  auth: [\n    { name: 'Lucia Auth', category: 'auth', rationale: 'Lightweight, database-agnostic session management', fit: 7 },\n    { name: 'Auth.js (NextAuth)', category: 'auth', rationale: 'OAuth providers, session management, JWT support', fit: 8 }\n  ],\n  realtime: [\n    { name: 'Socket.io', category: 'realtime', rationale: 'WebSocket abstraction with fallbacks and room support', fit: 8 }\n  ],\n  fileStorage: [\n    { name: 'S3-compatible (MinIO)', category: 'storage', rationale: 'Self-hosted object storage, S3 API compatible', fit: 8 }\n  ],\n  search: [\n    { name: 'MeiliSearch', category: 'search', rationale: 'Fast, typo-tolerant search engine with simple setup', fit: 7 }\n  ],\n  ml: [\n    { name: 'Ollama + Local LLMs', category: 'ml', rationale: 'Self-hosted inference, no API costs, data privacy', fit: 7 },\n    { name: 'LangChain.js', category: 'ml-framework', rationale: 'LLM orchestration with chains, agents, and memory', fit: 7 }\n  ],\n  ci: [\n    { name: 'GitHub Actions', category: 'ci', rationale: 'Native GitHub integration, YAML-based, free for public repos', fit: 9 }\n  ],\n  containerization: [\n    { name: 'Docker + Docker Compose', category: 'container', rationale: 'Standard containerization, local dev and production parity', fit: 9 }\n  ]\n};\n\nconst resolvedStack = [];\nconst rationale = [];\n\nactiveNeeds.forEach(need => {\n  const options = catalog[need] || [];\n  const filtered = options.filter(opt => {\n    if (constraintSet.has('no-cloud') && (opt.name.includes('AWS') || opt.name.includes('Cloud'))) return false;\n    if (constraintSet.has('self-hosted') && opt.name.includes('Vercel')) return false;\n    return true;\n  });\n\n  const best = filtered.sort((a, b) => b.fit - a.fit)[0];\n  if (best) {\n    resolvedStack.push(best);\n    rationale.push({\n      need: need,\n      chosen: best.name,\n      reason: best.rationale,\n      fitScore: best.fit,\n      alternativesConsidered: filtered.length - 1\n    });\n  }\n});\n\nreturn [{\n  json: {\n    projectId,\n    resolvedStack,\n    rationale,\n    summary: {\n      totalNeeds: activeNeeds.length,\n      resolved: resolvedStack.length,\n      unresolved: activeNeeds.length - resolvedStack.length,\n      avgFitScore: resolvedStack.length > 0\n        ? Math.round((resolvedStack.reduce((s, t) => s + t.fit, 0) / resolvedStack.length) * 10) / 10\n        : 0\n    },\n    completedAt: new Date().toISOString()\n  }\n}];"
+        },
+        "id": "tsr-003-resolve",
+        "name": "Resolve Stack",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ workflow: 'tech-stack-resolver', projectId: $json.projectId, result: { resolvedStack: $json.resolvedStack, rationale: $json.rationale, summary: $json.summary }, completedAt: $json.completedAt }) }}",
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "tsr-004-post",
+        "name": "Post Results",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ success: true, workflow: 'tech-stack-resolver', resolvedStack: $('Resolve Stack').first().json.resolvedStack, rationale: $('Resolve Stack').first().json.rationale, summary: $('Resolve Stack').first().json.summary, completedAt: $('Resolve Stack').first().json.completedAt }) }}",
+          "options": {}
+        },
+        "id": "tsr-005-respond",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1040,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Analyze Requirements",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Analyze Requirements": {
+        "main": [
+          [
+            {
+              "node": "Resolve Stack",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Resolve Stack": {
+        "main": [
+          [
+            {
+              "node": "Post Results",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Post Results": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "650834e5-278b-4184-8369-7429782e6fdd",
+    "activeVersionId": "650834e5-278b-4184-8369-7429782e6fdd",
+    "versionCounter": 49,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.047Z",
+        "createdAt": "2026-04-07T20:39:52.047Z",
+        "role": "workflow:owner",
+        "workflowId": "qTtokH57tUDc24Ag",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

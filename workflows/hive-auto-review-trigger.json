@@ -1,0 +1,297 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:51.999Z",
+    "id": "s52ae4UHrVUiMTlK",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Auto-Review Trigger",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "auto-review",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "hive-auto-review-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "auto-review"
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues/{{ $json.body.ticketId }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          }
+        },
+        "id": "hive-auto-review-fetch",
+        "name": "Fetch Ticket",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $('Webhook Trigger').first().json.body;\nconst ticket = $input.first().json;\n\nconst agentType = (input.agentType || '').toLowerCase();\nconst projectId = input.projectId || '';\nconst reviewCount = ticket.metadata?.review_count || 0;\nconst skipReview = ticket.metadata?.skip_review === true;\n\nconst T1_AGENTS = ['atlas', 'sentinel', 'argus', 'scout'];\n\nlet qualified = true;\nlet reason = '';\n\nif (agentType === 'nora') {\n  qualified = false;\n  reason = 'Nora cannot review own work';\n} else if (T1_AGENTS.includes(agentType)) {\n  qualified = false;\n  reason = 'T1 strategic agents skip auto-review';\n} else if (reviewCount >= 3) {\n  qualified = false;\n  reason = 'Maximum review cycles (3) reached';\n} else if (skipReview) {\n  qualified = false;\n  reason = 'skip_review flag is set on ticket';\n} else if (!projectId) {\n  qualified = false;\n  reason = 'Missing projectId';\n}\n\nreturn [{\n  json: {\n    ticketId: input.ticketId,\n    agentType: input.agentType,\n    projectId,\n    ticket,\n    qualified,\n    reason\n  }\n}];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-auto-review-qualify",
+        "name": "Qualification Check",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": ""
+            },
+            "conditions": [
+              {
+                "id": "is-qualified",
+                "leftValue": "={{ $json.qualified }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "hive-auto-review-if",
+        "name": "Qualified?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ title: 'Review: ' + ($json.ticket.title || 'Ticket ' + $json.ticketId), description: 'Auto-review triggered for ticket ' + $json.ticketId + ' completed by agent ' + $json.agentType + '.\\n\\nProject: ' + $json.projectId, assignee: 'nora', status: 'todo', priority: 'high', labels: ['review', 'auto-triggered'], metadata: { issue_type: 'review', sourceTicketId: $json.ticketId, originalAgent: $json.agentType, projectId: $json.projectId, reviewCycle: 1 } }) }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "hive-auto-review-create",
+        "name": "Create Review Ticket",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1040,
+          -120
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Auto-converted from Set v3 (n8n 2.15.x SetV2 node crashes at SetV2.node.ts:352)\nreturn [{ json: {\n  \"reason\": $json.reason,\n  \"ticketId\": $json.ticketId,\n  \"agentType\": $json.agentType,\n  \"reviewTriggered\": false\n} }];"
+        },
+        "id": "hive-auto-review-skip",
+        "name": "Skip Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          120
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const upstream = $input.first().json;\nconst reviewTriggered = upstream.reviewTriggered !== false;\n\nreturn [{\n  json: {\n    workflow: 'hive-auto-review',\n    endpoint: 'auto-review',\n    kind: 'deterministic',\n    status: 'accepted',\n    receivedAt: new Date().toISOString(),\n    timeoutMs: 15000,\n    success: true,\n    result: reviewTriggered\n      ? { reviewTriggered: true, reviewTicketId: upstream.id || null }\n      : { reviewTriggered: false, reason: upstream.reason || 'Unknown' }\n  }\n}];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-auto-review-backbone",
+        "name": "Build Backbone Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json) }}",
+          "options": {}
+        },
+        "id": "hive-auto-review-response",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1560,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Fetch Ticket",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Ticket": {
+        "main": [
+          [
+            {
+              "node": "Qualification Check",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Qualification Check": {
+        "main": [
+          [
+            {
+              "node": "Qualified?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Qualified?": {
+        "main": [
+          [
+            {
+              "node": "Create Review Ticket",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Skip Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Create Review Ticket": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Skip Response": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Backbone Response": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "21932920-573e-4eb6-bc74-f3d6f5a61381",
+    "activeVersionId": "21932920-573e-4eb6-bc74-f3d6f5a61381",
+    "versionCounter": 51,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.002Z",
+        "createdAt": "2026-04-07T20:39:52.002Z",
+        "role": "workflow:owner",
+        "workflowId": "s52ae4UHrVUiMTlK",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

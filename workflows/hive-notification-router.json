@@ -1,0 +1,390 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:52.022Z",
+    "id": "Vv0jlkYJCMnfkN83",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Notification Router",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "notify",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "hive-notify-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "notify"
+      },
+      {
+        "parameters": {
+          "rules": {
+            "values": [
+              {
+                "conditions": {
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "gate_passed",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    },
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "phase_completed",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    },
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "task_assigned",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    },
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "heartbeat_ok",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    }
+                  ],
+                  "combinator": "or",
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": "",
+                    "typeValidation": "loose"
+                  }
+                },
+                "renameOutput": true,
+                "outputKey": "info"
+              },
+              {
+                "conditions": {
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "review_failed",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    },
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "budget_alert",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    },
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "heartbeat_miss",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    },
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "gate_warning",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    }
+                  ],
+                  "combinator": "or",
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": "",
+                    "typeValidation": "loose"
+                  }
+                },
+                "renameOutput": true,
+                "outputKey": "warning"
+              },
+              {
+                "conditions": {
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "security_issue",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    },
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "system_down",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    },
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "gate_blocked",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    },
+                    {
+                      "leftValue": "={{ $json.body.eventType }}",
+                      "rightValue": "build_failed",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals",
+                        "name": "filter.operator.equals"
+                      }
+                    }
+                  ],
+                  "combinator": "or",
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": "",
+                    "typeValidation": "loose"
+                  }
+                },
+                "renameOutput": true,
+                "outputKey": "critical"
+              }
+            ]
+          },
+          "options": {
+            "fallbackOutput": "extra"
+          }
+        },
+        "id": "hive-notify-switch",
+        "name": "Classify Severity",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 3,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $input.first().json;\nconst body = input.body || input;\nconst eventType = body.eventType || 'unknown';\nconst projectId = body.projectId || '';\nconst details = body.details || {};\n\nconst INFO_EVENTS = ['gate_passed', 'phase_completed', 'task_assigned', 'heartbeat_ok'];\nconst WARNING_EVENTS = ['review_failed', 'budget_alert', 'heartbeat_miss', 'gate_warning'];\nconst CRITICAL_EVENTS = ['security_issue', 'system_down', 'gate_blocked', 'build_failed'];\n\nlet severity = 'info';\nlet priority = 'low';\nif (CRITICAL_EVENTS.includes(eventType)) {\n  severity = 'critical';\n  priority = 'urgent';\n} else if (WARNING_EVENTS.includes(eventType)) {\n  severity = 'warning';\n  priority = 'high';\n}\n\nconst title = '[' + severity.toUpperCase() + '] ' + eventType.replace(/_/g, ' ') +\n  (projectId ? ' \\u2014 Project ' + projectId : '');\n\nconst description = [\n  '**Event:** ' + eventType,\n  '**Severity:** ' + severity,\n  '**Project:** ' + (projectId || 'N/A'),\n  '**Time:** ' + new Date().toISOString(),\n  '',\n  '**Details:**',\n  JSON.stringify(details, null, 2)\n].join('\\n');\n\nreturn [{\n  json: {\n    title,\n    description,\n    severity,\n    priority,\n    eventType,\n    projectId,\n    details\n  }\n}];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-notify-format",
+        "name": "Format Message",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId }}/issues",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ title: $json.title, description: $json.description, assignee: $json.severity === 'critical' ? 'atlas' : 'sentinel', status: 'todo', priority: $json.priority, labels: ['notification', $json.severity, $json.eventType], metadata: { issue_type: 'notification', eventType: $json.eventType, severity: $json.severity, projectId: $json.projectId, details: $json.details, notifiedAt: new Date().toISOString() } }) }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "hive-notify-send",
+        "name": "Send to Board",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const formatResult = $('Format Message').first().json;\nconst boardResult = $input.first().json;\n\nreturn [{\n  json: {\n    workflow: 'hive-notify',\n    endpoint: 'notify',\n    kind: 'deterministic',\n    status: 'accepted',\n    receivedAt: new Date().toISOString(),\n    timeoutMs: 10000,\n    success: true,\n    result: {\n      notificationsSent: 1,\n      channels: ['board'],\n      severity: formatResult.severity,\n      eventType: formatResult.eventType,\n      notificationTicketId: boardResult.id || null\n    }\n  }\n}];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-notify-backbone",
+        "name": "Build Backbone Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json) }}",
+          "options": {}
+        },
+        "id": "hive-notify-response",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1300,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Classify Severity",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Classify Severity": {
+        "main": [
+          [
+            {
+              "node": "Format Message",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Format Message",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Format Message",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Format Message",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Message": {
+        "main": [
+          [
+            {
+              "node": "Send to Board",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send to Board": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Backbone Response": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "f06f3baa-acfc-4427-a5d1-41c149cc2f4c",
+    "activeVersionId": "f06f3baa-acfc-4427-a5d1-41c149cc2f4c",
+    "versionCounter": 50,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.024Z",
+        "createdAt": "2026-04-07T20:39:52.024Z",
+        "role": "workflow:owner",
+        "workflowId": "Vv0jlkYJCMnfkN83",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

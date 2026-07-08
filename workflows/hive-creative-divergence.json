@@ -1,0 +1,257 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:52.011Z",
+    "id": "cjXs4VxtgiF9QJaP",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Creative Divergence",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "creative-divergence",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "cd-001-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "creative-divergence"
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $input.first().json;\nconst body = input.body || input;\nconst { projectId, productVision, requirements, runId } = body;\n\nconst lenses = [\n  { name: 'User-Centric', focus: 'end-user delight and accessibility', angle: 'empathy-driven UX and friction reduction' },\n  { name: 'Platform-First', focus: 'extensible platform infrastructure', angle: 'API-driven composability and plugin architecture' },\n  { name: 'Revenue-Optimized', focus: 'fastest path to monetization', angle: 'pricing tiers, conversion funnels, unit economics' },\n  { name: 'Tech-Forward', focus: 'cutting-edge technology differentiation', angle: 'AI/ML integration and novel architectures' },\n  { name: 'Minimal-Viable', focus: 'smallest scope validating the hypothesis', angle: 'ruthless scope cutting and rapid iteration' }\n];\n\nconst reqList = Array.isArray(requirements) ? requirements : [];\n\nconst visions = lenses.map((lens, i) => ({\n  id: 'vision-' + (i + 1),\n  lens: lens.name,\n  focus: lens.focus,\n  angle: lens.angle,\n  description: lens.name + ' interpretation of: ' + (productVision || 'no vision provided'),\n  keyDifferentiator: 'Prioritizes ' + lens.focus + ' as primary design driver',\n  proposedScope: reqList.map(r => r + ' (through ' + lens.angle.split(' and ')[0] + ')'),\n  tradeoffs: {\n    optimizes: lens.focus,\n    defers: lenses.filter((_, j) => j !== i).slice(0, 2).map(l => l.name)\n  },\n  projectId,\n  runId\n}));\n\nreturn visions.map(v => ({ json: v }));"
+        },
+        "id": "cd-002-generate",
+        "name": "Generate Visions",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForEachItem",
+          "jsCode": "const vision = $json;\n\nconst scoreMatrix = {\n  'User-Centric':      { feasibility: 8, originality: 6, alignment: 9 },\n  'Platform-First':    { feasibility: 6, originality: 7, alignment: 7 },\n  'Revenue-Optimized': { feasibility: 9, originality: 5, alignment: 8 },\n  'Tech-Forward':      { feasibility: 5, originality: 9, alignment: 6 },\n  'Minimal-Viable':    { feasibility: 10, originality: 4, alignment: 8 }\n};\n\nconst base = scoreMatrix[vision.lens] || { feasibility: 5, originality: 5, alignment: 5 };\nconst scopeCount = (vision.proposedScope || []).length;\nconst complexityPenalty = Math.min(scopeCount * 0.15, 1.5);\n\nconst scores = {\n  feasibility: Math.round(Math.max(1, Math.min(10, base.feasibility - complexityPenalty)) * 10) / 10,\n  originality: Math.round(Math.max(1, Math.min(10, base.originality)) * 10) / 10,\n  alignment: Math.round(Math.max(1, Math.min(10, base.alignment)) * 10) / 10\n};\nscores.overall = Math.round(((scores.feasibility + scores.originality + scores.alignment) / 3) * 10) / 10;\n\nreturn { ...vision, scores };"
+        },
+        "id": "cd-003-score",
+        "name": "Score Each Vision",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": ""
+            },
+            "conditions": [
+              {
+                "id": "cd-filter-cond-overall",
+                "leftValue": "={{ $json.scores.overall }}",
+                "rightValue": 7,
+                "operator": {
+                  "type": "number",
+                  "operation": "gte"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "cd-004-filter",
+        "name": "Filter Survivors",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const survivors = $input.all().map(item => item.json);\n\nconst ranked = survivors\n  .sort((a, b) => b.scores.overall - a.scores.overall)\n  .map((v, i) => ({ ...v, rank: i + 1 }));\n\nconst first = ranked[0] || {};\n\nreturn [{\n  json: {\n    projectId: first.projectId,\n    runId: first.runId,\n    totalGenerated: 5,\n    survivorCount: ranked.length,\n    threshold: 7,\n    visions: ranked,\n    survivors: ranked,\n    recommendation: ranked.length > 0\n      ? 'Top vision: ' + ranked[0].lens + ' (score: ' + ranked[0].scores.overall + '/10)'\n      : 'No visions met the minimum threshold of 7.0',\n    completedAt: new Date().toISOString()\n  }\n}];"
+        },
+        "id": "cd-005-ranking",
+        "name": "Final Ranking",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ workflow: 'creative-divergence', projectId: $json.projectId, runId: $json.runId, result: { visions: $json.visions, survivors: $json.survivors, recommendation: $json.recommendation, survivorCount: $json.survivorCount }, completedAt: $json.completedAt }) }}",
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "cd-006-post",
+        "name": "Post Results",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ success: true, workflow: 'creative-divergence', visions: $('Final Ranking').first().json.visions, survivors: $('Final Ranking').first().json.survivors, recommendation: $('Final Ranking').first().json.recommendation, completedAt: $('Final Ranking').first().json.completedAt }) }}",
+          "options": {}
+        },
+        "id": "cd-007-respond",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1560,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Generate Visions",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate Visions": {
+        "main": [
+          [
+            {
+              "node": "Score Each Vision",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Score Each Vision": {
+        "main": [
+          [
+            {
+              "node": "Filter Survivors",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Filter Survivors": {
+        "main": [
+          [
+            {
+              "node": "Final Ranking",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Final Ranking": {
+        "main": [
+          [
+            {
+              "node": "Post Results",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Post Results": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "d91c2c59-9b30-4743-a19b-1e1aefff8f03",
+    "activeVersionId": "d91c2c59-9b30-4743-a19b-1e1aefff8f03",
+    "versionCounter": 49,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.013Z",
+        "createdAt": "2026-04-07T20:39:52.013Z",
+        "role": "workflow:owner",
+        "workflowId": "cjXs4VxtgiF9QJaP",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

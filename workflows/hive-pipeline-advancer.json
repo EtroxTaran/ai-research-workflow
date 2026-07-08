@@ -1,0 +1,498 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:52.026Z",
+    "id": "8ncQpfVxJCj1sM3A",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Pipeline Advancer",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "pipeline-advance",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "hive-pipeline-advance-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "pipeline-advance"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": ""
+            },
+            "conditions": [
+              {
+                "id": "cond-project-id",
+                "leftValue": "={{ $json.body.projectId }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "isNotEmpty"
+                }
+              },
+              {
+                "id": "cond-current-phase",
+                "leftValue": "={{ $json.body.currentPhase }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "isNotEmpty"
+                }
+              },
+              {
+                "id": "cond-gate-result",
+                "leftValue": "={{ $json.body.gateResult }}",
+                "rightValue": "PASS",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "validate-gate-result",
+        "name": "Validate Gate Result",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Auto-converted from Set v3 (n8n 2.15.x SetV2 node crashes at SetV2.node.ts:352)\nreturn [{ json: {\n  \"workflow\": \"hive-pipeline-advance\",\n  \"status\": \"rejected\",\n  \"error\": 'Gate result is not PASS (got: ' + ($json.body.gateResult || 'missing') + '). Pipeline cannot advance without a passing gate result.',\n  \"currentPhase\": $json.body.currentPhase || 'unknown',\n  \"success\": false\n} }];"
+        },
+        "id": "gate-failed-response",
+        "name": "Gate Failed Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          260,
+          400
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json) }}",
+          "options": {
+            "responseCode": 400
+          }
+        },
+        "id": "respond-gate-failed",
+        "name": "Respond Gate Failed",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          520,
+          400
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const body = $('Webhook Trigger').first().json.body;\nconst currentPhase = body.currentPhase;\n\nconst phaseOrder = [\n  'P0', 'P1a', 'P1b', 'P1c', 'P1d', 'P1.5',\n  'P2', 'P3', 'P4', 'P5', 'P6', 'P7',\n  'P8', 'P9', 'P10'\n];\n\nconst phaseNames = {\n  'P0': 'Intake',\n  'P1a': 'Product Research',\n  'P1b': 'OST Analysis',\n  'P1c': 'Zara Scenarios',\n  'P1d': 'Quality Attributes',\n  'P1.5': 'UX Design',\n  'P2': 'Architecture',\n  'P3': 'Team Assembly',\n  'P4': 'Task Breakdown',\n  'P5': 'Development',\n  'P6': 'Feature Complete',\n  'P7': 'Production Deploy',\n  'P8': 'Monitoring',\n  'P9': 'Lessons Learned',\n  'P10': 'Rollback & Recovery'\n};\n\nconst phaseLeads = {\n  'P0': 'atlas',\n  'P1a': 'vera',\n  'P1b': 'remi',\n  'P1c': 'zara',\n  'P1d': 'nora',\n  'P1.5': 'luna',\n  'P2': 'neo',\n  'P3': 'aria',\n  'P4': 'atlas',\n  'P5': 'specialist',\n  'P6': 'nora',\n  'P7': 'max',\n  'P8': 'eli',\n  'P9': 'nova',\n  'P10': 'max'\n};\n\nconst currentIndex = phaseOrder.indexOf(currentPhase);\nlet nextPhase = null;\nlet error = null;\n\nif (currentIndex === -1) {\n  error = `Unknown phase: ${currentPhase}`;\n} else if (currentIndex >= phaseOrder.length - 1) {\n  error = `No phase after ${currentPhase} \u2014 project lifecycle complete`;\n} else {\n  nextPhase = phaseOrder[currentIndex + 1];\n}\n\nreturn [{\n  json: {\n    projectId: body.projectId,\n    currentPhase,\n    nextPhase,\n    nextPhaseName: nextPhase ? (phaseNames[nextPhase] || nextPhase) : null,\n    nextPhaseLead: nextPhase ? (phaseLeads[nextPhase] || 'atlas') : null,\n    gateResult: body.gateResult,\n    isReworkPhase: ['P5', 'P6', 'P7'].includes(currentPhase),\n    error\n  }\n}];"
+        },
+        "id": "phase-order-map",
+        "name": "Phase Order Map",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "rules": {
+            "values": [
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.currentPhase }}",
+                      "rightValue": "P5",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "P5 Rework"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.currentPhase }}",
+                      "rightValue": "P6",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "P6 Rework"
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true,
+                    "leftValue": ""
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.currentPhase }}",
+                      "rightValue": "P7",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "P7 Rework"
+              }
+            ]
+          },
+          "options": {
+            "fallbackOutput": "extra"
+          }
+        },
+        "id": "check-rework-phase",
+        "name": "Check Rework Phase",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 3,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const data = $input.first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst currentPhase = data.currentPhase;\n\nconst reworkTargets = {\n  'P5': 'P5',\n  'P6': 'P5',\n  'P7': 'P6'\n};\n\nlet rework = false;\nlet reworkTarget = null;\nlet reworkReason = null;\n\nif (body.reworkRequired === true || body.failedCriteria) {\n  rework = true;\n  reworkTarget = reworkTargets[currentPhase] || currentPhase;\n  reworkReason = body.reworkReason || `Gate at ${currentPhase} requires rework \u2014 routing back to ${reworkTarget}`;\n}\n\nconst nextPhase = rework ? reworkTarget : data.nextPhase;\n\nreturn [{\n  json: {\n    ...data,\n    nextPhase,\n    nextPhaseName: rework ? `Rework from ${currentPhase}` : data.nextPhaseName,\n    rework,\n    reworkTarget: rework ? reworkTarget : null,\n    reworkReason\n  }\n}];"
+        },
+        "id": "evaluate-rework",
+        "name": "Evaluate Rework",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          -200
+        ]
+      },
+      {
+        "parameters": {},
+        "id": "normal-advance",
+        "name": "Normal Advance",
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [
+          1040,
+          200
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({\n  title: '[Phase ' + $json.nextPhase + '] ' + ($json.nextPhaseName || $json.nextPhase) + ' \u2014 ' + $json.projectId,\n  description: 'Advancing pipeline from ' + $json.currentPhase + ' to ' + $json.nextPhase + ($json.rework ? ' (REWORK: ' + $json.reworkReason + ')' : '') + '. Gate result: ' + $json.gateResult + '. Lead: ' + ($json.nextPhaseLead || 'atlas'),\n  priority: $json.rework ? 'high' : 'medium',\n  labels: ['pipeline-advance', $json.nextPhase, $json.rework ? 'rework' : 'normal'].filter(Boolean).join(','),\n  assignee: $json.nextPhaseLead || 'atlas',\n  metadata: {\n    projectId: $json.projectId,\n    phase: $json.nextPhase,\n    previousPhase: $json.currentPhase,\n    rework: $json.rework || false,\n    reworkTarget: $json.reworkTarget || null\n  }\n}) }}",
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "create-phase-tickets",
+        "name": "Create Phase Tickets",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({\n  title: '[Atlas] Pipeline advanced: ' + $('Phase Order Map').first().json.currentPhase + ' \u2192 ' + $('Phase Order Map').first().json.nextPhase,\n  description: 'Project ' + $('Phase Order Map').first().json.projectId + ' has advanced from ' + $('Phase Order Map').first().json.currentPhase + ' to ' + $('Phase Order Map').first().json.nextPhase + '. ' + ($('Phase Order Map').first().json.rework ? 'REWORK triggered: ' + $('Phase Order Map').first().json.reworkReason : 'Normal advancement.') + ' Next phase lead: ' + ($('Phase Order Map').first().json.nextPhaseLead || 'atlas'),\n  priority: 'low',\n  labels: 'notification,pipeline-advance,atlas',\n  assignee: 'atlas'\n}) }}",
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "notify-atlas",
+        "name": "Notify Atlas",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1560,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const phaseData = $('Phase Order Map').first().json;\nconst body = $('Webhook Trigger').first().json.body;\nconst now = new Date().toISOString();\n\nlet rework = phaseData.rework || false;\nlet reworkReason = phaseData.reworkReason || null;\ntry {\n  const reworkData = $('Evaluate Rework').first().json;\n  rework = reworkData.rework || false;\n  reworkReason = reworkData.reworkReason || null;\n} catch (e) {\n  // Evaluate Rework was not in the execution path\n}\n\nlet ticketsCreated = [];\ntry {\n  const ticketResponse = $('Create Phase Tickets').first().json;\n  ticketsCreated.push(ticketResponse.id || ticketResponse.issueId || 'created');\n} catch (e) {\n  // No ticket response\n}\ntry {\n  const notifyResponse = $('Notify Atlas').first().json;\n  ticketsCreated.push(notifyResponse.id || notifyResponse.issueId || 'notification-created');\n} catch (e) {\n  // No notification response\n}\n\nreturn [{\n  json: {\n    workflow: 'hive-pipeline-advance',\n    endpoint: 'pipeline-advance',\n    kind: 'deterministic',\n    status: phaseData.error ? 'error' : 'completed',\n    receivedAt: $('Webhook Trigger').first().json.headers?.['x-request-start'] || now,\n    completedAt: now,\n    timeoutMs: 30000,\n    success: !phaseData.error,\n    projectId: phaseData.projectId,\n    currentPhase: phaseData.currentPhase,\n    newPhase: phaseData.nextPhase,\n    newPhaseName: phaseData.nextPhaseName,\n    newPhaseLead: phaseData.nextPhaseLead,\n    gateResult: phaseData.gateResult,\n    ticketsCreated,\n    rework,\n    reworkReason,\n    error: phaseData.error || null\n  }\n}];"
+        },
+        "id": "hive-pipeline-advance-set",
+        "name": "Build Backbone Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1820,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json) }}",
+          "options": {}
+        },
+        "id": "hive-pipeline-advance-response",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          2080,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Validate Gate Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Validate Gate Result": {
+        "main": [
+          [
+            {
+              "node": "Phase Order Map",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Gate Failed Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Gate Failed Response": {
+        "main": [
+          [
+            {
+              "node": "Respond Gate Failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Phase Order Map": {
+        "main": [
+          [
+            {
+              "node": "Check Rework Phase",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Rework Phase": {
+        "main": [
+          [
+            {
+              "node": "Evaluate Rework",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Evaluate Rework",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Evaluate Rework",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Normal Advance",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Evaluate Rework": {
+        "main": [
+          [
+            {
+              "node": "Create Phase Tickets",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Normal Advance": {
+        "main": [
+          [
+            {
+              "node": "Create Phase Tickets",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Create Phase Tickets": {
+        "main": [
+          [
+            {
+              "node": "Notify Atlas",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Notify Atlas": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Backbone Response": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "d8c95762-c2b4-46af-8d4b-a92536662acf",
+    "activeVersionId": "d8c95762-c2b4-46af-8d4b-a92536662acf",
+    "versionCounter": 50,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.028Z",
+        "createdAt": "2026-04-07T20:39:52.028Z",
+        "role": "workflow:owner",
+        "workflowId": "8ncQpfVxJCj1sM3A",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

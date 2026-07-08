@@ -1,0 +1,158 @@
+{
+  "name": "🔬 · 🤖 Research Creator Discovery",
+  "tags": [
+    {
+      "name": "research"
+    },
+    {
+      "name": "ai-llm"
+    }
+  ],
+  "settings": {
+    "executionTimeout": 300,
+    "timezone": "Europe/Berlin"
+  },
+  "nodes": [
+    {
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        500
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "find-candidates",
+      "name": "Find Creator Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst surrealUser = $env.SURREALDB_USER || $env.SURREAL_USER || 'root';\nconst surrealPass = $env.SURREALDB_PASS || $env.SURREAL_PASS || '';\n\n// Find sources seen 3+ times that don't have a creator entry yet\nconst sql = `\nSELECT url, domain, title, source_type, run_count, reputation_score\nFROM source_registry\nWHERE run_count >= 3\nORDER BY run_count DESC\nLIMIT 50;\n`;\n\nlet sources = [];\ntry {\n  const result = execSync(`curl -s -X POST http://127.0.0.1:18000/sql -H \"Content-Type: application/json\" -H \"Accept: application/json\" -u \"${surrealUser}:${surrealPass}\" -H \"surreal-ns: research\" -H \"surreal-db: workflow\" --data '${sql.replace(/'/g, \"\\'\")}'`, {\n    encoding: 'utf-8', timeout: 15000\n  });\n  const parsed = JSON.parse(result);\n  sources = parsed[0]?.result || [];\n} catch (err) {\n  sources = [];\n}\n\n// Get existing creators to avoid duplicates\nlet existingDomains = new Set();\ntry {\n  const crResult = execSync(`curl -s -X POST http://127.0.0.1:18000/sql -H \"Content-Type: application/json\" -H \"Accept: application/json\" -u \"${surrealUser}:${surrealPass}\" -H \"surreal-ns: research\" -H \"surreal-db: workflow\" --data 'SELECT channel_url FROM creator;'`, {\n    encoding: 'utf-8', timeout: 10000\n  });\n  const crParsed = JSON.parse(crResult);\n  (crParsed[0]?.result || []).forEach(c => {\n    if (c.channel_url) existingDomains.add(c.channel_url);\n  });\n} catch(e) {}\n\n// Group by domain and identify creator patterns\nconst domainGroups = {};\nfor (const src of sources) {\n  const domain = src.domain || '';\n  if (!domain || domain === 'unknown') continue;\n  if (existingDomains.has(src.url)) continue;\n\n  if (!domainGroups[domain]) {\n    domainGroups[domain] = { domain, urls: [], total_runs: 0, avg_reputation: 0, source_type: src.source_type };\n  }\n  domainGroups[domain].urls.push(src.url);\n  domainGroups[domain].total_runs += src.run_count || 0;\n  domainGroups[domain].avg_reputation = src.reputation_score || 0.5;\n}\n\nconst candidates = Object.values(domainGroups)\n  .filter(g => g.total_runs >= 3)\n  .sort((a, b) => b.total_runs - a.total_runs)\n  .slice(0, 20);\n\nreturn [{ json: { candidates, count: candidates.length } }];"
+      }
+    },
+    {
+      "id": "classify-creators",
+      "name": "Classify with Gemini",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst candidates = $input.first().json.candidates || [];\nif (candidates.length === 0) {\n  return [{ json: { creators: [], count: 0 } }];\n}\n\nconst candidateList = candidates.map(c =>\n  `Domain: ${c.domain}, URLs: ${c.urls.slice(0,3).join(', ')}, Type: ${c.source_type}, Runs: ${c.total_runs}`\n).join('\\n');\n\nconst prompt = `Analysiere diese Domains/URLs und klassifiziere sie als Content Creators.\n\n${candidateList}\n\nFuer jeden identifizierbaren Creator, antworte mit JSON Array:\n[{\n  \"name\": \"Creator Name oder Domain\",\n  \"platform\": \"youtube|x|linkedin|substack|reddit|blog|rss|podcast\",\n  \"channel_url\": \"Haupt-URL\",\n  \"domain_tags\": [\"tag1\", \"tag2\"],\n  \"trust_suggestion\": \"high|medium|watch\"\n}]\n\nNur Creators die regelmaessig Inhalte produzieren. Ignoriere generische Domains (github.com, stackoverflow.com, wikipedia.org). NUR JSON Array, kein Markdown.`;\n\nlet creators = [];\ntry {\n  const stdout = execSync(`gemini -p \"${prompt.replace(/\"/g, '\\\\\"')}\"`, {\n    encoding: 'utf-8',\n    timeout: 60000,\n    env: { HOME: '/home/clawd', PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin', GEMINI_API_KEY: $env.GEMINI_API_KEY || $env.GOOGLE_GEMINI_API_KEY || '' }\n  });\n\n  const jsonMatch = stdout.match(/\\[\\s*\\{[\\s\\S]*\\}\\s*\\]/);\n  if (jsonMatch) {\n    creators = JSON.parse(jsonMatch[0]);\n  }\n} catch (err) {\n  // Fallback: create basic entries from domains\n  creators = candidates.slice(0, 10).map(c => ({\n    name: c.domain,\n    platform: c.source_type === 'youtube' ? 'youtube' : c.source_type === 'social' ? 'x' : 'blog',\n    channel_url: c.urls[0] || '',\n    domain_tags: [],\n    trust_suggestion: c.avg_reputation >= 0.7 ? 'medium' : 'watch'\n  }));\n}\n\nreturn [{ json: { creators, count: creators.length } }];"
+      }
+    },
+    {
+      "id": "insert-creators",
+      "name": "Insert into SurrealDB",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst surrealUser = $env.SURREALDB_USER || $env.SURREAL_USER || 'root';\nconst surrealPass = $env.SURREALDB_PASS || $env.SURREAL_PASS || '';\n\nconst creators = $input.first().json.creators || [];\nif (creators.length === 0) {\n  return [{ json: { inserted: 0, message: 'No new creators found' } }];\n}\n\nlet sql = '';\nlet count = 0;\n\nfor (const c of creators) {\n  if (!c.name || !c.channel_url) continue;\n\n  const validPlatforms = ['youtube', 'x', 'linkedin', 'substack', 'reddit', 'blog', 'rss', 'podcast'];\n  const platform = validPlatforms.includes(c.platform) ? c.platform : 'blog';\n  const validTrust = ['high', 'medium', 'watch'];\n  const trust = validTrust.includes(c.trust_suggestion) ? c.trust_suggestion : 'watch';\n  const tags = Array.isArray(c.domain_tags) ? c.domain_tags : [];\n\n  sql += `CREATE creator SET\n    name = ${JSON.stringify(c.name)},\n    platform = ${JSON.stringify(platform)},\n    channel_url = ${JSON.stringify(c.channel_url)},\n    trust_level = ${JSON.stringify(trust)},\n    domain_tags = ${JSON.stringify(tags)},\n    active = true,\n    status = 'pending_review',\n    discovered_at = time::now();\\n`;\n  count++;\n}\n\nif (sql) {\n  try {\n    execSync(`curl -s -X POST http://127.0.0.1:18000/sql -H \"Content-Type: application/json\" -H \"Accept: application/json\" -u \"${surrealUser}:${surrealPass}\" -H \"surreal-ns: research\" -H \"surreal-db: workflow\" --data '${sql.replace(/'/g, \"\\'\")}'`, {\n      encoding: 'utf-8', timeout: 15000\n    });\n  } catch(e) {}\n}\n\nreturn [{ json: { inserted: count, creators: creators.map(c => c.name) } }];"
+      }
+    },
+    {
+      "id": "notify-telegram",
+      "name": "Notify via Telegram",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst data = $input.first().json;\nconst count = data.inserted || 0;\n\nif (count === 0) {\n  return [{ json: { notified: false, reason: 'No new creators' } }];\n}\n\nconst names = (data.creators || []).slice(0, 10).join(', ');\nconst message = `Creator Discovery: ${count} neue Creator-Kandidaten gefunden\\n\\n${names}\\n\\nReview im Portal unter /research/creators`;\n\nconst body = JSON.stringify({ chat_id: Number($env.TELEGRAM_CHAT_ID || ''), text: message });\n\ntry {\n  execSync(`curl -s -X POST -H \"Content-Type: application/json\" -d '${body.replace(/'/g, \"'\\\\''\")}' \"https://api.telegram.org/bot${$env.RESEARCH_BOT_TOKEN || ''}/sendMessage\"`, {\n    encoding: 'utf-8', timeout: 10000\n  });\n} catch(e) {}\n\nreturn [{ json: { notified: true, count } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Find Creator Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Find Creator Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Creator Candidates": {
+      "main": [
+        [
+          {
+            "node": "Classify with Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify with Gemini": {
+      "main": [
+        [
+          {
+            "node": "Insert into SurrealDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert into SurrealDB": {
+      "main": [
+        [
+          {
+            "node": "Notify via Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "id": "TMg2GpvBwSIEQIqA"
+}

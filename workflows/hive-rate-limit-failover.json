@@ -1,0 +1,478 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:52.034Z",
+    "id": "vUo73JHgtThGbXAv",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Rate Limit Failover",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "rate-limit-failover",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "hive-failover-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "rate-limit-failover"
+      },
+      {
+        "parameters": {
+          "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst ticketId = body.ticketId;\nconst agentName = body.agentName;\nconst adapterType = body.adapterType;\nconst failureReason = body.failureReason || '';\nconst errorOutput = body.errorOutput || '';\n\nif (!ticketId || !agentName || !adapterType) {\n  return [{\n    json: {\n      valid: false,\n      error: 'Missing required fields: ticketId, agentName, adapterType'\n    }\n  }];\n}\n\nconst RATE_LIMIT_PATTERNS = [\n  /rate.?limit/i,\n  /overloaded/i,\n  /too many requests/i,\n  /429/,\n  /RESOURCE_EXHAUSTED/i,\n  /quota.?exceeded/i,\n  /capacity/i,\n  /usage.?limit/i,\n  /weekly.?limit/i,\n  /throttl/i\n];\n\nconst combined = failureReason + ' ' + errorOutput;\nconst isRateLimited = RATE_LIMIT_PATTERNS.some(p => p.test(combined));\n\nreturn [{\n  json: {\n    valid: true,\n    isRateLimited,\n    ticketId,\n    agentName,\n    adapterType,\n    failureReason,\n    errorOutput,\n    detectedAt: new Date().toISOString()\n  }\n}];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-failover-validate",
+        "name": "Validate and Detect",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "is-valid",
+                "leftValue": "={{ $json.valid }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals",
+                  "singleValue": true
+                }
+              },
+              {
+                "id": "is-rate-limited",
+                "leftValue": "={{ $json.isRateLimited }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "hive-failover-check",
+        "name": "Is Rate Limited",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $('Validate and Detect').first().json;\n\nconst PROVIDER_CHAIN = {\n  claude_local: ['cursor', 'codex_local', 'gemini_local'],\n  codex_local: ['cursor', 'claude_local', 'gemini_local'],\n  gemini_local: ['cursor', 'codex_local', 'claude_local'],\n  cursor: ['codex_local', 'claude_local', 'gemini_local'],\n};\n\nconst EXCLUDED_FROM_FAILOVER = ['atlas', 'nora'];\n\nconst CAPABILITY_GROUPS = {\n  implementation: {\n    cursor: ['neo', 'luna', 'lars', 'max', 'rio', 'quinn', 'remi', 'helix', 'vega', 'cursor-engineer-failover'],\n    codex_local: ['dana', 'finn', 'eli'],\n    claude_local: [],\n    gemini_local: [],\n  },\n  security_audit: {\n    cursor: ['sentinel', 'argus', 'cursor-security-failover'],\n    codex_local: ['eli'],\n    claude_local: [],\n    gemini_local: [],\n  },\n  devops: {\n    codex_local: ['zara', 'finn'],\n    cursor: ['vera', 'cursor-engineer-failover'],\n    claude_local: [],\n    gemini_local: [],\n  },\n  research: {\n    cursor: ['scout', 'cursor-analyst-failover', 'vera'],\n    codex_local: ['sage', 'eli'],\n    claude_local: [],\n    gemini_local: [],\n  },\n  product_qa: {\n    cursor: ['vera', 'nora', 'quinn'],\n    codex_local: ['sage', 'eli'],\n    claude_local: [],\n    gemini_local: [],\n  },\n  recruiting: {\n    codex_local: ['aria'],\n    cursor: ['vera'],\n    claude_local: [],\n    gemini_local: [],\n  },\n  retrospective: {\n    cursor: ['nova', 'helix'],\n    codex_local: ['aria'],\n    claude_local: [],\n    gemini_local: [],\n  },\n};\n\nif (EXCLUDED_FROM_FAILOVER.includes(input.agentName)) {\n  return [{\n    json: {\n      action: 'escalate',\n      reason: 'Agent ' + input.agentName + ' is excluded from auto-failover (strategic role)',\n      ticketId: input.ticketId,\n      agentName: input.agentName,\n      adapterType: input.adapterType,\n      fallbackAgent: null,\n      fallbackProvider: null,\n    },\n  }];\n}\n\nlet agentGroup = null;\nfor (const [group, providers] of Object.entries(CAPABILITY_GROUPS)) {\n  for (const agents of Object.values(providers)) {\n    if (agents.includes(input.agentName)) {\n      agentGroup = group;\n      break;\n    }\n  }\n  if (agentGroup) break;\n}\n\nif (!agentGroup) {\n  return [{\n    json: {\n      action: 'escalate',\n      reason: 'Agent ' + input.agentName + ' not found in any capability group',\n      ticketId: input.ticketId,\n      agentName: input.agentName,\n      adapterType: input.adapterType,\n      fallbackAgent: null,\n      fallbackProvider: null,\n    },\n  }];\n}\n\nconst chain = PROVIDER_CHAIN[input.adapterType] || ['cursor', 'codex_local'];\nlet fallbackAgent = null;\nlet fallbackProvider = null;\n\nfor (const nextProvider of chain) {\n  const candidates = (CAPABILITY_GROUPS[agentGroup] || {})[nextProvider] || [];\n  const filtered = candidates.filter(candidate => candidate !== input.agentName);\n  if (filtered.length > 0) {\n    fallbackAgent = filtered[0];\n    fallbackProvider = nextProvider;\n    break;\n  }\n}\n\nif (!fallbackAgent) {\n  return [{\n    json: {\n      action: 'escalate',\n      reason: 'No fallback agent available for group ' + agentGroup + ' across providers: ' + chain.join(', '),\n      ticketId: input.ticketId,\n      agentName: input.agentName,\n      adapterType: input.adapterType,\n      fallbackAgent: null,\n      fallbackProvider: null,\n    },\n  }];\n}\n\nreturn [{\n  json: {\n    action: 'reassign',\n    ticketId: input.ticketId,\n    agentName: input.agentName,\n    adapterType: input.adapterType,\n    fallbackAgent,\n    fallbackProvider,\n    capabilityGroup: agentGroup,\n    detectedAt: input.detectedAt,\n  },\n}];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-failover-resolve",
+        "name": "Resolve Fallback",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          780,
+          -120
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "has-fallback",
+                "leftValue": "={{ $json.action }}",
+                "rightValue": "reassign",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "hive-failover-can-reassign",
+        "name": "Can Reassign",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          -120
+        ]
+      },
+      {
+        "parameters": {
+          "method": "PATCH",
+          "url": "={{ ($env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102') + '/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues/' + $json.ticketId }}",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ assignee: $json.fallbackAgent, status: 'todo', metadata: { failoverFrom: $json.agentName, failoverReason: 'rate_limited', failoverProvider: $json.fallbackProvider, originalProvider: $json.adapterType, capabilityGroup: $json.capabilityGroup, failoverAt: $json.detectedAt } }) }}",
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          }
+        },
+        "id": "hive-failover-reassign",
+        "name": "Reassign Ticket",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          1300,
+          -240
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.N8N_WEBHOOK_BASE_URL || 'http://127.0.0.1:5678' }}/webhook/notify",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ eventType: 'rate_limit_failover', details: { ticketId: $('Resolve Fallback').first().json.ticketId, originalAgent: $('Resolve Fallback').first().json.agentName, originalProvider: $('Resolve Fallback').first().json.adapterType, fallbackAgent: $('Resolve Fallback').first().json.fallbackAgent, fallbackProvider: $('Resolve Fallback').first().json.fallbackProvider, capabilityGroup: $('Resolve Fallback').first().json.capabilityGroup } }) }}",
+          "options": {
+            "timeout": 5000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "onError": "continueRegularOutput"
+        },
+        "id": "hive-failover-notify-success",
+        "name": "Notify Reassignment",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          1560,
+          -240
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ ($env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102') + '/api/companies/ac69003b-0cd1-4156-9e8f-466aa4f56685/issues' }}",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ title: 'Escalation: Rate-limited agent ' + $json.agentName + ' \u2014 no fallback available', description: '**Agent:** ' + $json.agentName + '\\n**Provider:** ' + $json.adapterType + '\\n**Ticket:** ' + $json.ticketId + '\\n**Reason:** ' + $json.reason + '\\n\\nManual reassignment or wait for rate limit reset required.', assignee: 'atlas', type: 'alert', status: 'todo', priority: 'high', labels: ['rate-limit', 'escalation', 'failover-failed'], metadata: { ticketId: $json.ticketId, agentName: $json.agentName, adapterType: $json.adapterType, reason: $json.reason, escalatedAt: new Date().toISOString() } }) }}",
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          }
+        },
+        "id": "hive-failover-escalate",
+        "name": "Escalate to Atlas",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.N8N_WEBHOOK_BASE_URL || 'http://127.0.0.1:5678' }}/webhook/notify",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ eventType: 'rate_limit_escalation', details: { ticketId: $('Resolve Fallback').first().json.ticketId, agentName: $('Resolve Fallback').first().json.agentName, adapterType: $('Resolve Fallback').first().json.adapterType, reason: $('Resolve Fallback').first().json.reason } }) }}",
+          "options": {
+            "timeout": 5000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "onError": "continueRegularOutput"
+        },
+        "id": "hive-failover-notify-escalation",
+        "name": "Notify Escalation",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          1560,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $('Validate and Detect').first().json;\n\nreturn [{\n  json: {\n    action: 'skipped',\n    reason: !input.valid ? input.error : 'Failure is not a rate limit \u2014 standard error handling applies',\n    ticketId: input.ticketId || null,\n    agentName: input.agentName || null,\n    adapterType: input.adapterType || null,\n    fallbackAgent: null,\n    fallbackProvider: null\n  }\n}];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-failover-skip",
+        "name": "Not Rate Limited",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          780,
+          120
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "let upstream;\ntry {\n  upstream = $('Notify Reassignment').first().json;\n} catch (e) {\n  try {\n    upstream = $('Notify Escalation').first().json;\n  } catch (e2) {\n    try {\n      upstream = $('Not Rate Limited').first().json;\n    } catch (e3) {\n      upstream = { action: 'error', reason: 'Could not resolve upstream result' };\n    }\n  }\n}\n\nconst resolve = (() => {\n  try { return $('Resolve Fallback').first().json; } catch (e) { return null; }\n})();\nconst validate = (() => {\n  try { return $('Validate and Detect').first().json; } catch (e) { return null; }\n})();\n\nconst action = (resolve && resolve.action) || (validate && !validate.valid ? 'invalid' : 'skipped');\n\nreturn [{\n  json: {\n    workflow: 'hive-rate-limit-failover',\n    endpoint: 'rate-limit-failover',\n    kind: 'deterministic',\n    status: 'completed',\n    receivedAt: (validate && validate.detectedAt) || new Date().toISOString(),\n    timeoutMs: 30000,\n    success: true,\n    result: {\n      action,\n      ticketId: (resolve && resolve.ticketId) || (validate && validate.ticketId) || null,\n      originalAgent: (resolve && resolve.agentName) || (validate && validate.agentName) || null,\n      originalProvider: (resolve && resolve.adapterType) || (validate && validate.adapterType) || null,\n      fallbackAgent: resolve && resolve.fallbackAgent,\n      fallbackProvider: resolve && resolve.fallbackProvider,\n      capabilityGroup: resolve && resolve.capabilityGroup,\n      reason: (resolve && resolve.reason) || null\n    }\n  }\n}];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-failover-backbone",
+        "name": "Build Backbone Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1820,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json) }}",
+          "options": {}
+        },
+        "id": "hive-failover-response",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          2080,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Validate and Detect",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Validate and Detect": {
+        "main": [
+          [
+            {
+              "node": "Is Rate Limited",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is Rate Limited": {
+        "main": [
+          [
+            {
+              "node": "Resolve Fallback",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Not Rate Limited",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Resolve Fallback": {
+        "main": [
+          [
+            {
+              "node": "Can Reassign",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Can Reassign": {
+        "main": [
+          [
+            {
+              "node": "Reassign Ticket",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Escalate to Atlas",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Reassign Ticket": {
+        "main": [
+          [
+            {
+              "node": "Notify Reassignment",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Notify Reassignment": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Escalate to Atlas": {
+        "main": [
+          [
+            {
+              "node": "Notify Escalation",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Notify Escalation": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Not Rate Limited": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Backbone Response": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "c4495988-ffb0-420d-9467-51fa5079b090",
+    "activeVersionId": "c4495988-ffb0-420d-9467-51fa5079b090",
+    "versionCounter": 49,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.036Z",
+        "createdAt": "2026-04-07T20:39:52.036Z",
+        "role": "workflow:owner",
+        "workflowId": "vUo73JHgtThGbXAv",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

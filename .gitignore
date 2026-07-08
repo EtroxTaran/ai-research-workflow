@@ -1,0 +1,4 @@
+.playwright-mcp/
+
+.env
+.cursor/memory/

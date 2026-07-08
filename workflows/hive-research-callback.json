@@ -1,0 +1,201 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:48:53.000Z",
+    "createdAt": "2026-04-10T21:45:40.351Z",
+    "id": "64JclkzS1DnW6pGr",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Research Callback",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "id": "hive-cb-webhook",
+        "name": "Webhook: hive-research-done",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          300
+        ],
+        "webhookId": "hive-research-done",
+        "parameters": {
+          "path": "hive-research-done",
+          "httpMethod": "POST",
+          "responseMode": "onReceived",
+          "responseData": "allEntries"
+        }
+      },
+      {
+        "id": "hive-cb-parse",
+        "name": "Parse Research Result",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          300,
+          300
+        ],
+        "parameters": {
+          "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst runId = body.run_id || '';\nconst status = body.status || 'unknown';\nconst report = body.report || body.message || '';\nconst mode = body.mode || 'standard';\n\n// Extract projectId from run_id (format: hive_{{projectId}}_{{timestamp}})\nconst parts = runId.split('_');\nconst projectId = parts.length >= 2 ? parts[1] : '';\n\nreturn [{ json: { run_id: runId, status, report, mode, projectId, received_at: new Date().toISOString() } }];"
+        }
+      },
+      {
+        "id": "hive-cb-if-done",
+        "name": "IF Research Complete?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          600,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "done-check",
+                "leftValue": "={{ $json.status }}",
+                "rightValue": "done",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          }
+        }
+      },
+      {
+        "id": "hive-cb-post-paperclip",
+        "name": "Post Summary to Paperclip",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          900,
+          200
+        ],
+        "parameters": {
+          "url": "={{ $env.PAPERCLIP_API_URL + '/api/research/' + $json.run_id + '/result' }}",
+          "method": "POST",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_TOKEN }}"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ run_id: $json.run_id, project_id: $json.projectId, status: $json.status, mode: $json.mode, summary: $json.report.substring(0, 2000), completed_at: $json.received_at }) }}"
+        },
+        "continueOnFail": true
+      },
+      {
+        "id": "hive-cb-log-failed",
+        "name": "Log: Research Failed",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          900,
+          400
+        ],
+        "parameters": {
+          "jsCode": "const data = $input.first().json;\nconsole.log(`Hive research failed/incomplete: run_id=${data.run_id}, status=${data.status}`);\nreturn [{ json: { logged: true, run_id: data.run_id, status: data.status } }];"
+        }
+      }
+    ],
+    "connections": {
+      "Webhook: hive-research-done": {
+        "main": [
+          [
+            {
+              "node": "Parse Research Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Research Result": {
+        "main": [
+          [
+            {
+              "node": "IF Research Complete?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "IF Research Complete?": {
+        "main": [
+          [
+            {
+              "node": "Post Summary to Paperclip",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Log: Research Failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "saveManualExecutions": false,
+      "callerPolicy": "workflowsFromSameOwner",
+      "errorWorkflow": ""
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": null,
+    "versionId": "2e68cbba-6cbf-45e8-ac52-6590ba596fd3",
+    "activeVersionId": "2e68cbba-6cbf-45e8-ac52-6590ba596fd3",
+    "versionCounter": 17,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-10T21:45:40.356Z",
+        "createdAt": "2026-04-10T21:45:40.356Z",
+        "role": "workflow:owner",
+        "workflowId": "64JclkzS1DnW6pGr",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

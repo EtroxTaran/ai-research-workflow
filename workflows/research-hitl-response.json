@@ -1,0 +1,206 @@
+{
+  "id": "ghzLn4jf6buFCtk8",
+  "name": "\ud83d\udd2c \u00b7 \u2699\ufe0f Research HITL Response (Agent Callback)",
+  "nodes": [
+    {
+      "id": "hitl-webhook-trigger",
+      "name": "Webhook: research-hitl-response",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "research-hitl-response",
+      "parameters": {
+        "path": "research-hitl-response",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "responseData": "allEntries"
+      }
+    },
+    {
+      "id": "hitl-parse-response",
+      "name": "Parse HITL Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst runId = body.run_id || '';\nconst approved = body.approved === true || body.approved === 'true';\nconst answer = body.answer || '';\nconst editedQuery = body.edited_query || '';\nconst triggerSource = body.trigger_source || 'unknown';\n\nif (!runId) throw new Error('run_id is required');\n\nreturn [{ json: { run_id: runId, approved, answer, edited_query: editedQuery, trigger_source: triggerSource, received_at: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "hitl-surreal-update",
+      "name": "SurrealDB: Update HITL Decision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        600,
+        300
+      ],
+      "parameters": {
+        "url": "http://127.0.0.1:18000/sql",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "surreal-ns",
+              "value": "research"
+            },
+            {
+              "name": "surreal-db",
+              "value": "workflow"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ `UPDATE research_run SET hitl_approved = ${$json.approved}, hitl_answer = '${$json.answer}', hitl_decided_at = '${$json.received_at}', status = '${$json.approved ? 'hitl_approved' : 'hitl_rejected'}' WHERE id = '${$json.run_id}';` }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ICgLzc5AfiFid0By",
+          "name": "surrealdb-basic-auth"
+        }
+      }
+    },
+    {
+      "id": "hitl-branch",
+      "name": "IF Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "approved-check",
+              "leftValue": "={{ $json.approved }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "hitl-approved-log",
+      "name": "Log: HITL Approved",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        200
+      ],
+      "parameters": {
+        "jsCode": "// HITL approved \u2014 the research pipeline will detect the DB status change\n// and continue the synthesis phase on next poll cycle\nconst data = $input.first().json;\nconsole.log(`HITL approved for run ${data.run_id} by ${data.trigger_source}`);\nreturn [{ json: { status: 'accepted', run_id: data.run_id, message: 'HITL approved \u2014 pipeline will continue' } }];"
+      }
+    },
+    {
+      "id": "hitl-rejected-log",
+      "name": "Log: HITL Rejected",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconsole.log(`HITL rejected for run ${data.run_id}: ${data.answer}`);\nreturn [{ json: { status: 'rejected', run_id: data.run_id, reason: data.answer } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook: research-hitl-response": {
+      "main": [
+        [
+          {
+            "node": "Parse HITL Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse HITL Response": {
+      "main": [
+        [
+          {
+            "node": "SurrealDB: Update HITL Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SurrealDB: Update HITL Decision": {
+      "main": [
+        [
+          {
+            "node": "IF Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Approved?": {
+      "main": [
+        [
+          {
+            "node": "Log: HITL Approved",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log: HITL Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "tags": [
+    {
+      "name": "research"
+    }
+  ],
+  "active": true
+}

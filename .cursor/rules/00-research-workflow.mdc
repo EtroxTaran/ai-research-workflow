@@ -1,0 +1,57 @@
+---
+description: Project-specific rules for research-workflow-n8n AI Research Pipeline
+alwaysApply: true
+---
+
+# Research Workflow Rules (n8n + SurrealDB + Nexus Portal)
+
+**Goal**: Maintain production stability of the n8n research pipeline while improving Cursor agent capabilities for development, testing, and UI work in the linked ai-portal.
+
+## Core Constraints (NEVER violate)
+- **No changes to production n8n workflows** without explicit approval and backup of JSON files. The 22 active workflows (orchestrator ID 69QGdrWQneaaph5Z etc.) run on R2D2.
+- Do not alter webhook URLs (`/webhook/research-start`), SurrealDB namespace `research/workflow`, or schema without updating portal/PLUGIN-SPEC.md and ai-portal integration.
+- No hardcoded secrets. All keys in `~/.openclaw/.env` or documented for user.
+- Follow global rules: Plan Mode first, git checkpoint, verify with lint/tests, no `any`, conventional commits, shadcn/Tailwind for UI.
+- Skills for research trigger n8n; do not implement research logic in Cursor agent.
+
+## MCP Best Practices for this Project
+- Use project `.cursor/mcp.json` for reproducibility.
+- Enabled: context7 (for n8n, SurrealDB, Playwright, React, shadcn docs), cursor-app-control (for worktree/project management), Playwright MCP (`@playwright/mcp` in `.cursor/mcp.json`, server key `playwright`) for UI testing of Nexus Portal, **n8n** (HTTP MCP to the self-hosted instance; requires `${env:N8N_MCP_URL}` and `${env:N8N_MCP_TOKEN}`).
+- Limit active tools. Use env vars `${env:VAR}` for any secrets.
+- Debug with MCP Logs in Output panel.
+- For ai-portal: Prioritize Playwright E2E for dashboard, sources table, HITL flows.
+
+## Skills Usage
+- `research-workflow`: ONLY for triggering n8n via webhook. Canonical source: `skills/research-workflow/SKILL.md`. The same file is linked at `.cursor/skills/research-workflow/SKILL.md` for Cursor discovery (do not duplicate content).
+- Use skill-creator workflow for new skills (evals.json, ≥80% pass rate).
+- Relevant skills: javascript-testing-patterns (for Playwright), architecture (for pipeline decisions), backend-security-coder (for any API nodes), para-memory-files (for research knowledge).
+- Integrate HITL patterns from n8n (Telegram buttons, quality gates) into rules/skills.
+
+## UI / Portal Development (ai-portal/plugins/research-plugin/)
+- Use shadcn/ui + Tailwind + Radix + lucide-react (per PLUGIN-SPEC.md).
+- React 18+ functional components, TanStack Query for polling SurrealDB (`research_run` status).
+- Accessibility, TypeScript strict (Zod schemas from PLUGIN-SPEC.md), no class components.
+- Playwright tests for critical flows: new research form, dashboard polling, source registry CRUD, HITL buttons.
+- Components to prioritize: ResearchDashboard, SourceRegistryTable, ResearchRunDetail.
+
+## n8n & SurrealDB Patterns
+- CLI-first (gemini, claude, codex) in Execute Command nodes.
+- Quality gates, adaptive modes (quick/standard/deep), reputation tracking in source_registry.
+- Schema changes must match schema/research-workflow.surql.
+- Use context7 MCP for up-to-date docs on n8n MCP Server Trigger, SurrealDB SDK, Playwright Test Agents.
+
+## Verification
+- Always run relevant checks: lint, typecheck, playwright test (in ai-portal), n8n workflow validation if changed.
+- Test end-to-end: trigger skill → n8n run → SurrealDB entry → Portal update (if applicable).
+- Git diff review before commit.
+
+## Prompt Template for this Project
+```
+Goal: [specific task e.g. "Add shadcn DataTable to research sources page"]
+Context: Affects ai-portal/plugins/research-plugin/, must align with portal/PLUGIN-SPEC.md and schema/research-workflow.surql. No changes to n8n JSONs.
+Current Behavior: [describe]
+Desired Behavior: [describe]
+Constraints: Production n8n stable, use existing Zod schemas, Tailwind/shadcn only.
+```
+
+Follow global rules + these for all work on this project.

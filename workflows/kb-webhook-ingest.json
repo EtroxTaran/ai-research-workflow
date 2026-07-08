@@ -1,0 +1,120 @@
+{
+  "id": "kb-webhook-ingest-1",
+  "name": "\ud83d\udcda \u00b7 \u2699\ufe0f KB Webhook URL Submit",
+  "active": 1,
+  "nodes": [
+    {
+      "parameters": {
+        "path": "kb-ingest",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        250,
+        300
+      ],
+      "webhookId": "kb-ingest"
+    },
+    {
+      "parameters": {
+        "jsCode": "const url = $input.first().json.body?.url || $input.first().json.url;\nconst tags = $input.first().json.body?.tags || $input.first().json.tags || [];\n\nif (!url) {\n  return [{ json: { error: 'url field required', status: 'error' } }];\n}\n\nreturn [{ json: { url, tags: Array.isArray(tags) ? tags.join(',') : tags, status: 'ok' } }];"
+      },
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        470,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'python3 ~/.openclaw/workspace/scripts/kb-ingest.py \"' + $json.url + '\"' + ($json.tags ? ' --tags \"' + $json.tags + '\"' : '') }}"
+      },
+      "id": "run-ingest",
+      "name": "Run kb-ingest",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        690,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'ok', url: $('Validate Input').first().json.url, output: $json.stdout || '' }) }}"
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        910,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Run kb-ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run kb-ingest": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "staticData": null,
+  "pinData": null,
+  "versionId": "86f18693-0a26-4321-828e-5a3d97e5be0a",
+  "triggerCount": 0,
+  "meta": null,
+  "parentFolderId": null,
+  "createdAt": "2026-03-14 15:05:16.813",
+  "updatedAt": "2026-04-09 16:00:35.533",
+  "isArchived": 0,
+  "versionCounter": 3,
+  "description": null,
+  "activeVersionId": null,
+  "tags": [
+    {
+      "name": "kb"
+    }
+  ]
+}

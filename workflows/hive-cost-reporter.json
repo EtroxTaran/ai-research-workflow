@@ -1,0 +1,308 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:52.008Z",
+    "id": "RWppN4c34UK70MMQ",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Cost Reporter",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "cost-report",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "hive-cost-report-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "cost-report"
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "={{ $env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102' }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId }}/issues?status=done&updatedSince={{ $json.body.date || new Date(Date.now() - 86400000).toISOString() }}",
+          "options": {
+            "timeout": 10000,
+            "fullResponse": false
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Accept",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          }
+        },
+        "id": "hive-cost-report-query-activity",
+        "name": "Query Activity",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const webhookData = $('Webhook Trigger').first().json.body || {};\nconst reportDate = webhookData.date || new Date().toISOString().split('T')[0];\nconst tickets = Array.isArray($input.first().json) ? $input.first().json : ($input.first().json.data || []);\n\nconst agentCosts = {};\nconst adapterCosts = {};\nconst projectCosts = {};\n\nconst ADAPTER_COST_PER_TICKET = {\n  claude_local: 0.50,\n  codex_local: 0.40,\n  gemini_local: 0.05,\n  http: 0.01,\n  cursor: 0.45\n};\n\nconst AGENT_BUDGETS = {\n  argus: 10,\n  scout: 10\n};\n\nfor (const ticket of tickets) {\n  const agent = ticket.assignee || 'unassigned';\n  const adapter = ticket.adapterType || 'claude_local';\n  const project = ticket.projectId || ticket.goalId || 'general';\n  const cost = ADAPTER_COST_PER_TICKET[adapter] || 0.10;\n\n  if (!agentCosts[agent]) {\n    agentCosts[agent] = { totalCost: 0, ticketCount: 0, adapter: adapter };\n  }\n  agentCosts[agent].totalCost += cost;\n  agentCosts[agent].ticketCount += 1;\n\n  if (!adapterCosts[adapter]) {\n    adapterCosts[adapter] = { totalCost: 0, ticketCount: 0 };\n  }\n  adapterCosts[adapter].totalCost += cost;\n  adapterCosts[adapter].ticketCount += 1;\n\n  if (!projectCosts[project]) {\n    projectCosts[project] = { totalCost: 0, ticketCount: 0 };\n  }\n  projectCosts[project].totalCost += cost;\n  projectCosts[project].ticketCount += 1;\n}\n\nconst totalCost = Object.values(agentCosts).reduce((sum, a) => sum + a.totalCost, 0);\n\nconst warnings = [];\nfor (const [agent, data] of Object.entries(agentCosts)) {\n  const budget = AGENT_BUDGETS[agent];\n  if (budget && budget > 0) {\n    const utilization = (data.totalCost / budget) * 100;\n    if (utilization > 80) {\n      warnings.push({\n        agent,\n        budget,\n        spent: Math.round(data.totalCost * 100) / 100,\n        utilization: Math.round(utilization),\n        severity: utilization >= 100 ? 'critical' : 'warning'\n      });\n    }\n  }\n}\n\nconst agentBreakdown = Object.entries(agentCosts).map(([name, data]) => ({\n  agent: name,\n  adapter: data.adapter,\n  cost: Math.round(data.totalCost * 100) / 100,\n  tickets: data.ticketCount\n})).sort((a, b) => b.cost - a.cost);\n\nreturn [{\n  json: {\n    reportDate,\n    totalCost: Math.round(totalCost * 100) / 100,\n    totalTickets: tickets.length,\n    agentBreakdown,\n    adapterBreakdown: Object.entries(adapterCosts).map(([name, data]) => ({\n      adapter: name,\n      cost: Math.round(data.totalCost * 100) / 100,\n      tickets: data.ticketCount\n    })),\n    projectBreakdown: Object.entries(projectCosts).map(([name, data]) => ({\n      project: name,\n      cost: Math.round(data.totalCost * 100) / 100,\n      tickets: data.ticketCount\n    })),\n    warnings,\n    hasWarnings: warnings.length > 0\n  }\n}];"
+        },
+        "id": "hive-cost-report-aggregate",
+        "name": "Aggregate Costs",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "threshold-check",
+                "leftValue": "={{ $json.hasWarnings }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "hive-cost-report-threshold",
+        "name": "Check Thresholds",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102' }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues",
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "title",
+                "value": "={{ 'Budget Alert: ' + $json.warnings.length + ' agent(s) exceeding 80% threshold' }}"
+              },
+              {
+                "name": "description",
+                "value": "={{ 'Cost report for ' + $json.reportDate + '\\n\\nTotal cost: $' + $json.totalCost + '\\nAgents over budget:\\n' + $json.warnings.map(w => '- ' + w.agent + ': $' + w.spent + '/' + w.budget + ' (' + w.utilization + '%) \u2014 ' + w.severity).join('\\n') }}"
+              },
+              {
+                "name": "type",
+                "value": "alert"
+              },
+              {
+                "name": "priority",
+                "value": "high"
+              },
+              {
+                "name": "assignee",
+                "value": "atlas"
+              },
+              {
+                "name": "status",
+                "value": "todo"
+              }
+            ]
+          },
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          }
+        },
+        "id": "hive-cost-report-alert",
+        "name": "Create Alert",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          1040,
+          -120
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Auto-converted from Set v3 (n8n 2.15.x SetV2 node crashes at SetV2.node.ts:352)\nreturn [{ json: {\n  \"workflow\": \"hive-cost-report\",\n  \"endpoint\": \"cost-report\",\n  \"kind\": \"deterministic\",\n  \"status\": \"completed\",\n  \"receivedAt\": $now.toISO(),\n  \"timeoutMs\": 30000,\n  \"success\": true,\n  \"result\": JSON.stringify({ totalCost: $('Aggregate Costs').first().json.totalCost, totalTickets: $('Aggregate Costs').first().json.totalTickets, agentBreakdown: $('Aggregate Costs').first().json.agentBreakdown, warnings: $('Aggregate Costs').first().json.warnings, reportDate: $('Aggregate Costs').first().json.reportDate })\n} }];"
+        },
+        "id": "hive-cost-report-set",
+        "name": "Build Backbone Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ success: $json.success, workflow: $json.workflow, kind: $json.kind, status: $json.status, receivedAt: $json.receivedAt, result: typeof $json.result === 'string' ? JSON.parse($json.result) : $json.result }) }}",
+          "options": {}
+        },
+        "id": "hive-cost-report-response",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1560,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Query Activity",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Query Activity": {
+        "main": [
+          [
+            {
+              "node": "Aggregate Costs",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Aggregate Costs": {
+        "main": [
+          [
+            {
+              "node": "Check Thresholds",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Thresholds": {
+        "main": [
+          [
+            {
+              "node": "Create Alert",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Create Alert": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Backbone Response": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "6388c65c-ed5a-458e-bc49-b388631341eb",
+    "activeVersionId": "6388c65c-ed5a-458e-bc49-b388631341eb",
+    "versionCounter": 50,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.009Z",
+        "createdAt": "2026-04-07T20:39:52.009Z",
+        "role": "workflow:owner",
+        "workflowId": "RWppN4c34UK70MMQ",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

@@ -1,0 +1,35 @@
+---
+description: Rules for Nexus Portal UI development with shadcn/ui and Playwright
+alwaysApply: false
+---
+
+# Nexus Portal UI Rules (@nexus/plugin-research)
+
+**Scope**: ai-portal/plugins/research-plugin/ and related UI for research dashboard, runs, sources, creators (per research-workflow-n8n/portal/PLUGIN-SPEC.md).
+
+## Required Stack
+- **shadcn/ui**: Init with Tailwind, Radix, lucide-react, TanStack Query, Zod.
+- **React 18+**: Functional components, custom hooks, Server Components where possible. Strict TS, no `any`.
+- **Playwright**: Full E2E for critical flows (new research, polling, HITL buttons, source registry). Use Test Agents pattern, accessibility locators (`getByRole`).
+- **Styling**: Tailwind only. Follow shadcn conventions for DataTable, Dialog, etc.
+
+## Components from PLUGIN-SPEC.md
+- ResearchDashboard, ResearchRunList, ResearchRunDetail, SourceRegistryTable, CreatorRegistryTable, NewResearchForm.
+- Use Zod schemas for research_run, source_registry, creator (copy from PLUGIN-SPEC.md as single source of truth).
+- Polling: TanStack Query with 5s interval for active runs (`research_run` status).
+
+## Testing
+- Playwright tests in e2e/ for:
+  - Triggering research from UI → webhook.
+  - Live status updates from SurrealDB.
+  - Source/Creator CRUD.
+  - HITL approval buttons.
+- Use playwright-mcp for agent-assisted test creation/debugging.
+
+## Best Practices
+- Accessibility mandatory (ARIA, keyboard).
+- Error boundaries, structured errors, no leaking internals.
+- Align with research quality gates and unified source model.
+- Before edits: Read portal/PLUGIN-SPEC.md, schema/research-workflow.surql, PRODUCT-VISION.md.
+
+Use with context7 MCP for latest shadcn, Playwright, TanStack docs.

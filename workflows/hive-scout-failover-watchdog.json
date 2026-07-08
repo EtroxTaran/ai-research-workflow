@@ -1,0 +1,190 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:53:12.283Z",
+    "id": "dX5wsM4NLkSEHv05",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Scout Failover Watchdog",
+    "description": null,
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "scout-failover-watchdog",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "watchdog-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "scout-failover-watchdog"
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "={{ ($env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102') + '/api/companies/ac69003b-0cd1-4156-9e8f-466aa4f56685/issues?status=todo&updatedBefore=' + new Date(Date.now() - 300000).toISOString() }}",
+          "options": {
+            "timeout": 5000,
+            "fullResponse": false
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Accept",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          },
+          "onError": "continueRegularOutput"
+        },
+        "id": "watchdog-check-todo",
+        "name": "Check Stalled Todo Tickets",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const data = $('Check Stalled Todo Tickets').first().json;\nconst tickets = Array.isArray(data) ? data : (data.data || []);\nconst candidates = [];\n\nfor (const ticket of tickets) {\n  const isScout = ticket.executionAgentNameKey === 'scout' || ticket.assignee === 'scout';\n  const hasExecutionLock = !!ticket.executionRunId || !!ticket.executionLockedAt;\n  const alreadyFailoverTagged = !!(ticket.metadata && ticket.metadata.failoverFrom);\n\n  if (isScout && hasExecutionLock && !alreadyFailoverTagged) {\n    candidates.push({\n      ticketId: ticket.id,\n      agentName: 'scout',\n      adapterType: 'cursor',\n      requestedModel: 'auto',\n      failureReason: '429 RESOURCE_EXHAUSTED MODEL_CAPACITY_EXHAUSTED MODEL_UNAVAILABLE (watchdog-detected stalled scout execution)',\n      errorOutput: `executionRunId=${ticket.executionRunId || 'unknown'}`\n    });\n  }\n}\n\nreturn [{ json: { candidates } }];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "watchdog-build-candidates",
+        "name": "Build Failover Candidates",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const candidates = $('Build Failover Candidates').first().json.candidates || [];\nconst webhookBase = $env.N8N_WEBHOOK_BASE_URL || 'http://127.0.0.1:5678';\nconst results = [];\n\nfor (const candidate of candidates) {\n  try {\n    const resp = await this.helpers.httpRequest({\n      method: 'POST',\n      url: webhookBase + '/webhook/rate-limit-failover',\n      body: candidate,\n      headers: { 'Content-Type': 'application/json' },\n      timeout: 15000,\n    });\n    results.push({ ticketId: candidate.ticketId, status: 'triggered', response: resp });\n  } catch (err) {\n    results.push({ ticketId: candidate.ticketId, status: 'failed', error: err.message });\n  }\n}\n\nreturn [{ json: { scanned: candidates.length, results } }];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "watchdog-trigger-failover",
+        "name": "Trigger Failover Workflow",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ workflow: 'hive-scout-failover-watchdog', scanned: $json.scanned, results: $json.results, success: true }) }}",
+          "options": {}
+        },
+        "id": "watchdog-respond",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1040,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Check Stalled Todo Tickets",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Stalled Todo Tickets": {
+        "main": [
+          [
+            {
+              "node": "Build Failover Candidates",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Failover Candidates": {
+        "main": [
+          [
+            {
+              "node": "Trigger Failover Workflow",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Trigger Failover Workflow": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "fcd9eb9a-104c-48b3-9ab0-2b945dbfb1c2",
+    "activeVersionId": null,
+    "versionCounter": 23,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:53:12.289Z",
+        "createdAt": "2026-04-07T20:53:12.289Z",
+        "role": "workflow:owner",
+        "workflowId": "dX5wsM4NLkSEHv05",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

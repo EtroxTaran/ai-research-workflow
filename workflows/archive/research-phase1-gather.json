@@ -1,0 +1,386 @@
+{
+  "name": "Research Phase 1 \u2014 Parallel Data Gathering",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-phase1",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\n\ntry {\n  const result = execSync(\"={{ 'python3 /home/clawd/.openclaw/workspace/scripts/kb-search.py \\\"' + $json.search_plan.search_terms.join(' ') + '\\\" --limit 20' }}\", {\n    encoding: 'utf-8',\n    timeout: 120000,\n    env: { ...process.env, PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:' + process.env.PATH },\n    cwd: '/home/clawd'\n  });\n  \n  return [{ json: { stdout: result, exitCode: 0 } }];\n} catch (error) {\n  return [{ json: { stdout: error.stdout || '', stderr: error.stderr || error.message, exitCode: error.status || 1 } }];\n}",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "kb-search-exec",
+      "name": "KB Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse KB search results into standard source format\nconst stdout = $input.first().json.stdout || '';\nlet results = [];\n\ntry {\n  results = JSON.parse(stdout);\n} catch (e) {\n  // Falls kb-search.py zeilenweise JSON liefert\n  results = stdout.trim().split('\\n').filter(Boolean).map(line => {\n    try { return JSON.parse(line); } catch { return null; }\n  }).filter(Boolean);\n}\n\nconst sources = results.map(r => ({\n  url: r.url || r.path || `kb://local/${r.id || r.title}`,\n  title: r.title || r.name || 'KB Result',\n  snippet: r.snippet || r.content || r.text || '',\n  source_type: 'kb',\n  origin: 'kb-search',\n  relevance_score: r.score || r.relevance || 0.5,\n  tier: 'T2',\n  raw: r\n}));\n\nreturn [{ json: { sources, branch: 'kb' } }];"
+      },
+      "id": "kb-parse",
+      "name": "Parse KB Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.search.brave.com/res/v1/web/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.search_plan.search_terms.join(' ') }}"
+            },
+            {
+              "name": "count",
+              "value": "10"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Subscription-Token",
+              "value": "={{ $credentials.braveApi }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "brave-search",
+      "name": "Brave Web Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ api_key: $credentials.tavilyApi, query: $json.search_plan.search_terms.join(' '), search_depth: 'advanced', max_results: 10, include_raw_content: false }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "tavily-search",
+      "name": "Tavily Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        400,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "id": "merge-web-results",
+      "name": "Merge Web Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        700,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge + deduplicate Brave and Tavily results\nconst items = $input.all();\nconst seen = new Set();\nconst sources = [];\n\n// Brave results\nconst braveData = items[0]?.json || {};\nconst braveResults = braveData.web?.results || [];\nfor (const r of braveResults) {\n  const url = r.url;\n  if (url && !seen.has(url)) {\n    seen.add(url);\n    sources.push({\n      url,\n      title: r.title || '',\n      snippet: r.description || '',\n      source_type: 'web',\n      origin: 'brave',\n      relevance_score: 0.5,\n      tier: 'T3',\n      published_at: r.page_age || null\n    });\n  }\n}\n\n// Tavily results\nconst tavilyData = items[1]?.json || {};\nconst tavilyResults = tavilyData.results || [];\nfor (const r of tavilyResults) {\n  const url = r.url;\n  if (url && !seen.has(url)) {\n    seen.add(url);\n    sources.push({\n      url,\n      title: r.title || '',\n      snippet: r.content || '',\n      source_type: 'web',\n      origin: 'tavily',\n      relevance_score: r.score || 0.5,\n      tier: 'T3',\n      published_at: r.published_date || null\n    });\n  } else if (url && seen.has(url)) {\n    // Boost relevance for sources found by both engines\n    const existing = sources.find(s => s.url === url);\n    if (existing) {\n      existing.relevance_score = Math.min(1.0, existing.relevance_score + 0.2);\n      existing.origin = 'brave+tavily';\n    }\n  }\n}\n\nreturn [{ json: { sources, branch: 'web' } }];"
+      },
+      "id": "web-deduplicate",
+      "name": "Deduplicate Web Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:8070/v1/entries",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "search",
+              "value": "={{ $json.search_plan.keywords.join(' ') }}"
+            },
+            {
+              "name": "status",
+              "value": "unread"
+            },
+            {
+              "name": "limit",
+              "value": "50"
+            },
+            {
+              "name": "order",
+              "value": "published_at"
+            },
+            {
+              "name": "direction",
+              "value": "desc"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Auth-Token",
+              "value": "={{ $credentials.minifluxApi }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "miniflux-search",
+      "name": "MiniFlux RSS Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        400,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter MiniFlux entries by relevance + extract content\nconst data = $input.first().json;\nconst entries = data.entries || [];\nconst searchTerms = ($input.first().json.search_plan?.keywords || []).map(k => k.toLowerCase());\n\n// Score entries by keyword presence in title + content\nconst scored = entries.map(entry => {\n  const title = (entry.title || '').toLowerCase();\n  const content = (entry.content || '').toLowerCase();\n  let score = 0;\n  for (const term of searchTerms) {\n    if (title.includes(term)) score += 0.3;\n    if (content.includes(term)) score += 0.1;\n  }\n  // Normalize to 0-1\n  score = Math.min(1.0, score);\n  return { entry, score };\n}).filter(s => s.score > 0.1)\n  .sort((a, b) => b.score - a.score)\n  .slice(0, 20);\n\nconst sources = scored.map(({ entry, score }) => {\n  // Strip HTML tags for snippet\n  const plainContent = (entry.content || '').replace(/<[^>]*>/g, '').slice(0, 500);\n  return {\n    url: entry.url || entry.feed?.site_url || '',\n    title: entry.title || '',\n    snippet: plainContent,\n    source_type: 'rss',\n    origin: 'miniflux',\n    relevance_score: score,\n    tier: 'T3',\n    published_at: entry.published_at || null,\n    feed_title: entry.feed?.title || '',\n    miniflux_entry_id: entry.id\n  };\n});\n\nreturn [{ json: { sources, branch: 'rss' } }];"
+      },
+      "id": "miniflux-filter",
+      "name": "Filter RSS Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "id": "merge-all-branches",
+      "name": "Merge All Branches",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1300,
+        400
+      ],
+      "notesInFlow": true,
+      "notes": "Merges KB + Web + RSS branches"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deduplication (URL-based), assign source_type and initial tier\nconst items = $input.all();\nconst seen = new Map();\nconst allSources = [];\n\n// Sammle alle Sources aus allen Branches\nfor (const item of items) {\n  const branchSources = item.json.sources || [];\n  for (const source of branchSources) {\n    const url = source.url;\n    if (!url) continue;\n\n    if (seen.has(url)) {\n      // Bereits gesehen: Boost relevance, merge origins\n      const existing = seen.get(url);\n      existing.relevance_score = Math.min(1.0, existing.relevance_score + 0.15);\n      if (!existing.origin.includes(source.origin)) {\n        existing.origin += '+' + source.origin;\n      }\n      // Multi-source = hoehere Zuverlaessigkeit\n      existing.cross_referenced = true;\n    } else {\n      const entry = {\n        ...source,\n        cross_referenced: false\n      };\n      seen.set(url, entry);\n      allSources.push(entry);\n    }\n  }\n}\n\n// Assign source_type basierend auf URL-Pattern\nfor (const s of allSources) {\n  if (!s.source_type || s.source_type === 'web') {\n    const url = s.url.toLowerCase();\n    if (url.includes('arxiv.org') || url.includes('scholar.google') || url.includes('doi.org')) {\n      s.source_type = 'academic';\n      s.tier = 'T1';\n    } else if (url.includes('reddit.com') || url.includes('x.com') || url.includes('twitter.com')) {\n      s.source_type = 'social';\n    } else if (url.includes('youtube.com') || url.includes('youtu.be')) {\n      s.source_type = 'youtube';\n    }\n  }\n  // Cross-referenced sources get a tier boost\n  if (s.cross_referenced && s.tier === 'T3') {\n    s.tier = 'T2';\n  }\n}\n\n// Sortieren nach Relevanz\nallSources.sort((a, b) => b.relevance_score - a.relevance_score);\n\n// Statistiken\nconst platforms = new Set(allSources.map(s => s.origin.split('+')[0]));\nconst stats = {\n  total_sources: allSources.length,\n  unique_platforms: platforms.size,\n  platforms: [...platforms],\n  by_tier: {\n    T1: allSources.filter(s => s.tier === 'T1').length,\n    T2: allSources.filter(s => s.tier === 'T2').length,\n    T3: allSources.filter(s => s.tier === 'T3').length\n  },\n  cross_referenced: allSources.filter(s => s.cross_referenced).length\n};\n\nreturn [{ json: { sources: allSources, stats } }];"
+      },
+      "id": "deduplicate-all",
+      "name": "Deduplicate All Sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Basic claim extraction \u2014 extract key statements from sources\nconst { sources, stats } = $input.first().json;\nconst claims = [];\n\nfor (const source of sources) {\n  const snippet = source.snippet || '';\n  if (!snippet || snippet.length < 30) continue;\n\n  // Einfache Satz-Extraktion: Saetze die faktische Aussagen enthalten\n  const sentences = snippet\n    .replace(/\\s+/g, ' ')\n    .split(/(?<=[.!?])\\s+/)\n    .filter(s => s.length > 30 && s.length < 500);\n\n  for (const sentence of sentences.slice(0, 3)) {\n    // Filter fuer Aussagen die wie Claims klingen\n    // (enthalten Zahlen, Vergleiche, definitive Aussagen)\n    const isLikelyClaim = /\\d/.test(sentence) ||\n      /(?:is|are|was|were|has|have|will|can|should|must|shows?|proves?|indicates?|according|found|reported|announced|launched|released)/i.test(sentence) ||\n      /(?:ist|sind|war|hat|wird|kann|soll|muss|zeigt|beweist|laut|ergab|berichtet)/i.test(sentence);\n\n    if (isLikelyClaim) {\n      claims.push({\n        text: sentence.trim(),\n        source_url: source.url,\n        source_title: source.title,\n        source_type: source.source_type,\n        confidence: 0.0,\n        cove_status: null,\n        final_status: 'pending'\n      });\n    }\n  }\n}\n\n// Dedupliziere aehnliche Claims (exakte Duplikate)\nconst uniqueClaims = [];\nconst seenTexts = new Set();\nfor (const claim of claims) {\n  const normalized = claim.text.toLowerCase().replace(/\\s+/g, ' ').trim();\n  if (!seenTexts.has(normalized)) {\n    seenTexts.add(normalized);\n    uniqueClaims.push(claim);\n  }\n}\n\nreturn [{\n  json: {\n    sources,\n    claims: uniqueClaims,\n    stats: {\n      ...stats,\n      total_claims: uniqueClaims.length,\n      claims_from_sources: new Set(uniqueClaims.map(c => c.source_url)).size\n    }\n  }\n}];"
+      },
+      "id": "claim-extraction",
+      "name": "Basic Claim Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "KB Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Brave Web Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Tavily Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "MiniFlux RSS Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KB Search": {
+      "main": [
+        [
+          {
+            "node": "Parse KB Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse KB Results": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Brave Web Search": {
+      "main": [
+        [
+          {
+            "node": "Merge Web Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tavily Search": {
+      "main": [
+        [
+          {
+            "node": "Merge Web Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Web Results": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate Web Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicate Web Results": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "MiniFlux RSS Search": {
+      "main": [
+        [
+          {
+            "node": "Filter RSS Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter RSS Results": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge All Branches": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate All Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicate All Sources": {
+      "main": [
+        [
+          {
+            "node": "Basic Claim Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "meta": {
+    "instanceId": "research-workflow-n8n"
+  },
+  "id": "phase1"
+}

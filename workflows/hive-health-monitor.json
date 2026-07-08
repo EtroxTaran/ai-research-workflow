@@ -1,0 +1,518 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:51:37.195Z",
+    "id": "rfqdv7Q4nEhnemPY",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Health Monitor",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "health-check",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "hive-health-check-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "health-check"
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "={{ $env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102' }}/api/health",
+          "options": {
+            "timeout": 5000,
+            "fullResponse": true
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Accept",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          },
+          "onError": "continueRegularOutput"
+        },
+        "id": "hive-health-check-paperclip",
+        "name": "Check Paperclip",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "={{ ($env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102') + '/api/companies/ac69003b-0cd1-4156-9e8f-466aa4f56685/agents' }}",
+          "options": {
+            "timeout": 5000,
+            "fullResponse": false
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Accept",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          },
+          "onError": "continueRegularOutput"
+        },
+        "id": "hive-health-check-heartbeats",
+        "name": "Check Agent Heartbeats",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          260,
+          260
+        ]
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "={{ ($env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102') + '/api/companies/ac69003b-0cd1-4156-9e8f-466aa4f56685/issues?status=in_progress&updatedBefore=' + new Date(Date.now() - 3600000).toISOString() }}",
+          "options": {
+            "timeout": 5000,
+            "fullResponse": false
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Accept",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          },
+          "onError": "continueRegularOutput"
+        },
+        "id": "hive-health-check-stuck",
+        "name": "Check Stuck Tickets",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          260,
+          520
+        ]
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "={{ ($env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102') + '/api/companies/ac69003b-0cd1-4156-9e8f-466aa4f56685/issues?status=todo&updatedBefore=' + new Date(Date.now() - 300000).toISOString() }}",
+          "options": {
+            "timeout": 5000,
+            "fullResponse": false
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Accept",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          },
+          "onError": "continueRegularOutput"
+        },
+        "id": "hive-health-check-failed",
+        "name": "Check Failed Tickets",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          260,
+          780
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const now = Date.now();\nconst checks = [];\nconst alerts = [];\nconst failoverCandidates = [];\n\nconst paperclipResult = $('Check Paperclip').first().json;\nconst paperclipBody = paperclipResult.body || paperclipResult;\nconst paperclipOk = paperclipResult.statusCode === 200 || paperclipBody.status === 'ok';\nchecks.push({\n  name: 'paperclip_api',\n  status: paperclipOk ? 'healthy' : 'unhealthy',\n  latencyMs: paperclipResult.responseTime || null,\n  detail: paperclipOk ? 'API responding' : 'API not responding or returned error'\n});\nif (!paperclipOk) {\n  alerts.push({ severity: 'critical', source: 'paperclip_api', message: 'Paperclip API is not responding' });\n}\n\nconst agentData = $('Check Agent Heartbeats').first().json;\nconst agents = Array.isArray(agentData) ? agentData : (agentData.data || []);\nconst heartbeatEnabledAgents = agents.filter(agent => agent.runtimeConfig?.heartbeat?.enabled);\nconst staleAgents = [];\nlet healthyAgents = 0;\nconst scoutAgent = agents.find(agent => agent.name === 'scout') || null;\nconst scoutAgentId = scoutAgent?.id || null;\n\nfor (const agent of heartbeatEnabledAgents) {\n  const intervalSec = agent.runtimeConfig?.heartbeat?.intervalSec || 0;\n  if (!intervalSec) continue;\n\n  const lastRaw = agent.lastHeartbeatAt || agent.lastHeartbeat || null;\n  const lastBeat = lastRaw ? new Date(lastRaw).getTime() : 0;\n  const staleSec = lastBeat ? (now - lastBeat) / 1000 : Number.POSITIVE_INFINITY;\n  const maxAllowed = intervalSec * 2;\n\n  if (staleSec > maxAllowed) {\n    staleAgents.push({\n      agent: agent.name,\n      lastHeartbeatAt: lastRaw || 'never',\n      staleSec: Math.round(staleSec),\n      expectedIntervalSec: intervalSec\n    });\n  } else {\n    healthyAgents++;\n  }\n}\n\nchecks.push({\n  name: 'agent_heartbeats',\n  status: staleAgents.length === 0 ? 'healthy' : 'degraded',\n  detail: `${healthyAgents} healthy, ${staleAgents.length} stale`,\n  staleAgents\n});\n\nif (staleAgents.length > 0) {\n  const criticalAgents = staleAgents.filter(agent => ['atlas', 'sentinel', 'argus', 'scout'].includes(agent.agent));\n  alerts.push({\n    severity: criticalAgents.length > 0 ? 'critical' : 'warning',\n    source: 'agent_heartbeats',\n    message: `${staleAgents.length} agent(s) missed heartbeat: ${staleAgents.map(agent => agent.agent).join(', ')}`\n  });\n}\n\nconst stuckData = $('Check Stuck Tickets').first().json;\nconst stuckTickets = Array.isArray(stuckData) ? stuckData : (stuckData.data || []);\nchecks.push({\n  name: 'stuck_tickets',\n  status: stuckTickets.length === 0 ? 'healthy' : 'degraded',\n  detail: `${stuckTickets.length} ticket(s) in_progress > 1 hour`,\n  tickets: stuckTickets.map(ticket => ({\n    id: ticket.id,\n    title: ticket.title,\n    assigneeAgentId: ticket.assigneeAgentId || null,\n    executionAgentNameKey: ticket.executionAgentNameKey || null,\n    updatedAt: ticket.updatedAt || null\n  }))\n});\nif (stuckTickets.length >= 3) {\n  alerts.push({\n    severity: 'warning',\n    source: 'stuck_tickets',\n    message: `${stuckTickets.length} tickets stuck in_progress for more than one hour`\n  });\n}\n\nconst staleTodoData = $('Check Failed Tickets').first().json;\nconst staleTodoTickets = Array.isArray(staleTodoData) ? staleTodoData : (staleTodoData.data || []);\nfor (const ticket of staleTodoTickets) {\n  const isScout = ticket.executionAgentNameKey === 'scout' || ticket.assignee === 'scout' || (scoutAgentId && ticket.assigneeAgentId === scoutAgentId);\n  const hasExecutionLock = !!ticket.executionRunId || !!ticket.executionLockedAt;\n  const alreadyFailoverTagged = !!(ticket.metadata && ticket.metadata.failoverFrom);\n\n  if (isScout && hasExecutionLock && !alreadyFailoverTagged) {\n    failoverCandidates.push({\n      ticketId: ticket.id,\n      agentName: 'scout',\n      adapterType: scoutAgent?.adapterType || 'cursor',\n      requestedModel: scoutAgent?.adapterConfig?.model || 'auto',\n      failureReason: 'stalled scout execution detected by health monitor',\n      errorOutput: `stalled_execution_run=${ticket.executionRunId || 'unknown'}`\n    });\n  }\n}\n\nchecks.push({\n  name: 'stalled_scout_executions',\n  status: failoverCandidates.length === 0 ? 'healthy' : 'degraded',\n  detail: `${failoverCandidates.length} stalled scout ticket(s) detected`,\n  failoverCandidates\n});\nif (failoverCandidates.length > 0) {\n  alerts.push({\n    severity: 'warning',\n    source: 'scout_capacity_recovery',\n    message: `${failoverCandidates.length} stalled scout ticket(s) normalized into rate-limit-failover`\n  });\n}\n\nconst overallHealthy = checks.every(check => check.status === 'healthy');\nreturn [{\n  json: {\n    healthy: overallHealthy,\n    timestamp: new Date().toISOString(),\n    checks,\n    alerts,\n    hasAlerts: alerts.length > 0,\n    failoverCandidates\n  }\n}];"
+        },
+        "id": "hive-health-check-evaluate",
+        "name": "Evaluate Health",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          580,
+          260
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "alert-check",
+                "leftValue": "={{ $json.hasAlerts }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "hive-health-check-if-alerts",
+        "name": "Has Alerts",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          840,
+          260
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "has-failover-candidates",
+                "leftValue": "={{ $json.failoverCandidates.length }}",
+                "rightValue": 0,
+                "operator": {
+                  "type": "number",
+                  "operation": "gt"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "hive-health-check-has-failovers",
+        "name": "Has Failover Candidates",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          840,
+          520
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const candidates = $('Evaluate Health').first().json.failoverCandidates || [];\nconst results = [];\nconst webhookBase = $env.N8N_WEBHOOK_BASE_URL || 'http://127.0.0.1:5678';\n\nfor (const candidate of candidates) {\n  try {\n    const resp = await this.helpers.httpRequest({\n      method: 'POST',\n      url: webhookBase + '/webhook/rate-limit-failover',\n      body: candidate,\n      headers: { 'Content-Type': 'application/json' },\n      timeout: 15000,\n    });\n    results.push({ ticketId: candidate.ticketId, agent: candidate.agentName, status: 'triggered', response: resp });\n  } catch (err) {\n    results.push({ ticketId: candidate.ticketId, agent: candidate.agentName, status: 'failed', error: err.message });\n  }\n}\n\nreturn [{ json: { failoverResults: results, triggered: results.length } }];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-health-check-trigger-failover",
+        "name": "Trigger Failovers",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1100,
+          520
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ ($env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102') + '/api/companies/ac69003b-0cd1-4156-9e8f-466aa4f56685/issues' }}",
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "title",
+                "value": "={{ 'Health Alert: ' + $json.alerts.filter(a => a.severity === 'critical').length + ' critical, ' + $json.alerts.filter(a => a.severity === 'warning').length + ' warning' }}"
+              },
+              {
+                "name": "description",
+                "value": "={{ 'System health check at ' + $json.timestamp + '\\n\\nOverall: ' + ($json.healthy ? 'HEALTHY' : 'DEGRADED') + '\\n\\nAlerts:\\n' + $json.alerts.map(a => '- [' + a.severity.toUpperCase() + '] ' + a.source + ': ' + a.message).join('\\n') + '\\n\\nChecks:\\n' + $json.checks.map(c => '- ' + c.name + ': ' + c.status + ' \u2014 ' + c.detail).join('\\n') }}"
+              },
+              {
+                "name": "type",
+                "value": "alert"
+              },
+              {
+                "name": "priority",
+                "value": "={{ $json.alerts.some(a => a.severity === 'critical') ? 'critical' : 'high' }}"
+              },
+              {
+                "name": "assignee",
+                "value": "sentinel"
+              },
+              {
+                "name": "status",
+                "value": "todo"
+              }
+            ]
+          },
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          }
+        },
+        "id": "hive-health-check-create-alert",
+        "name": "Create Alerts",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          1100,
+          140
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const now = new Date().toISOString();\nconst webhookBody = $('Webhook Trigger').first().json;\nconst receivedAt = webhookBody.headers && webhookBody.headers['x-request-start']\n  ? webhookBody.headers['x-request-start']\n  : now;\n\nlet healthy = null;\nlet checks = [];\nlet alerts = [];\ntry {\n  const eh = $('Evaluate Health').first().json;\n  healthy = eh.healthy;\n  checks = (eh.checks || []).map(c => ({ name: c.name, status: c.status }));\n  alerts = eh.alerts || [];\n} catch (e) {\n  // Evaluate Health not in execution path \u2014 fall through with defaults\n}\n\nreturn [{\n  json: {\n    workflow: 'hive-health-check',\n    endpoint: 'health-check',\n    kind: 'deterministic',\n    status: 'completed',\n    receivedAt,\n    completedAt: now,\n    timeoutMs: 10000,\n    success: true,\n    result: JSON.stringify({ healthy, checks, alerts })\n  }\n}];"
+        },
+        "id": "hive-health-check-set",
+        "name": "Build Backbone Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1360,
+          260
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ success: $json.success, workflow: $json.workflow, kind: $json.kind, status: $json.status, receivedAt: $json.receivedAt, result: typeof $json.result === 'string' ? JSON.parse($json.result) : $json.result }) }}",
+          "options": {}
+        },
+        "id": "hive-health-check-response",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1620,
+          260
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Check Paperclip",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Paperclip": {
+        "main": [
+          [
+            {
+              "node": "Check Agent Heartbeats",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Agent Heartbeats": {
+        "main": [
+          [
+            {
+              "node": "Check Stuck Tickets",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Stuck Tickets": {
+        "main": [
+          [
+            {
+              "node": "Check Failed Tickets",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Failed Tickets": {
+        "main": [
+          [
+            {
+              "node": "Evaluate Health",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Evaluate Health": {
+        "main": [
+          [
+            {
+              "node": "Has Alerts",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Has Failover Candidates",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Has Alerts": {
+        "main": [
+          [
+            {
+              "node": "Create Alerts",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Has Failover Candidates": {
+        "main": [
+          [
+            {
+              "node": "Trigger Failovers",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Trigger Failovers": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Create Alerts": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Backbone Response": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "8776851c-58b9-441f-9fe9-adeeeacbcda7",
+    "activeVersionId": "8776851c-58b9-441f-9fe9-adeeeacbcda7",
+    "versionCounter": 45,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:51:37.200Z",
+        "createdAt": "2026-04-07T20:51:37.200Z",
+        "role": "workflow:owner",
+        "workflowId": "rfqdv7Q4nEhnemPY",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

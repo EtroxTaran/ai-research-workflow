@@ -1,0 +1,126 @@
+{
+  "name": "research-phase0-plan",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-001",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\n\nconst query = $input.first().json.query || 'test';\nconst safeQuery = query.replace(/\"/g, '\\\\\"').replace(/\\n/g, ' ');\n\nconst prompt = `Analyze this research query and return ONLY a JSON object (no markdown, no explanation) with these fields: sub_questions (array of objects with id, question, search_type), search_terms (object with primary_de, primary_en arrays), sources (array from: kb, web, deep, social, academic, miniflux), scope (object with time_range, languages), domain_classification (one of: tech, finance, academic, product_comparison, travel, general), mode (one of: quick, standard, deep). Rules: quick=simple facts, standard=comparisons/analysis, deep=high stakes. Query: ${safeQuery}`;\n\ntry {\n  const result = execSync(`gemini -p \"${prompt.replace(/\"/g, '\\\\\"')}\"`, {\n    encoding: 'utf-8',\n    timeout: 120000,\n    env: { ...process.env, PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:' + (process.env.PATH || ''), HOME: '/home/clawd' },\n    cwd: '/home/clawd'\n  });\n  \n  return [{ json: { stdout: result, exitCode: 0, query: query } }];\n} catch (error) {\n  return [{ json: { stdout: error.stdout || '', stderr: error.stderr || error.message, exitCode: error.status || 1, query: query } }];\n}",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "gemini-decompose-002",
+      "name": "Gemini Query Decomposition",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Gemini CLI JSON output — robust extraction\nconst raw = $input.first().json.stdout || '';\n\n// Gemini CLI gibt stderr-Zeilen vor dem JSON aus (ERROR, Server, Loaded etc.)\n// Diese Zeilen filtern und nur das JSON extrahieren\nlet jsonStr = '';\n\n// Versuch 1: Markdown JSON Block\nconst mdMatch = raw.match(/```json\\n?([\\s\\S]*?)\\n?```/);\nif (mdMatch) {\n  jsonStr = mdMatch[1];\n} else {\n  // Versuch 2: Erstes valides JSON-Objekt finden\n  const lines = raw.split('\\n');\n  let braceCount = 0;\n  let jsonStart = -1;\n  let jsonEnd = -1;\n  \n  for (let i = 0; i < lines.length; i++) {\n    const line = lines[i];\n    // Stderr-Zeilen ueberspringen\n    if (line.startsWith('[ERROR]') || line.startsWith('Loaded ') || line.startsWith('Server ') || line.trim() === '') continue;\n    \n    if (jsonStart === -1 && line.trim().startsWith('{')) {\n      jsonStart = i;\n    }\n    if (jsonStart >= 0) {\n      for (const ch of line) {\n        if (ch === '{') braceCount++;\n        if (ch === '}') braceCount--;\n      }\n      if (braceCount === 0 && jsonStart >= 0) {\n        jsonEnd = i;\n        break;\n      }\n    }\n  }\n  \n  if (jsonStart >= 0 && jsonEnd >= 0) {\n    jsonStr = lines.slice(jsonStart, jsonEnd + 1).join('\\n');\n  } else {\n    jsonStr = raw;\n  }\n}\n\nlet parsed;\ntry {\n  parsed = JSON.parse(jsonStr.trim());\n} catch (e) {\n  // Fallback: Minimalen Plan erzeugen\n  const query = $('Execute Workflow Trigger').first().json.query || '';\n  parsed = {\n    sub_questions: [{id: 'sq-1', question: query, search_type: 'web'}],\n    search_terms: {primary_de: [query], primary_en: [query]},\n    sources: ['web', 'kb'],\n    scope: {time_range: 'last_year', languages: ['de', 'en']},\n    domain_classification: 'general',\n    mode: 'quick'\n  };\n}\n\n// Fehlende Felder mit Defaults auffuellen\nif (!parsed.scope) parsed.scope = {time_range: 'last_year', languages: ['de', 'en']};\nif (!parsed.sources) parsed.sources = ['web', 'kb'];\nif (!parsed.search_terms) parsed.search_terms = {primary_de: [], primary_en: []};\n\n// Valide Modi\nconst validModes = ['quick', 'standard', 'deep'];\nif (!validModes.includes(parsed.mode)) parsed.mode = 'standard';\n\n// Mode Override\nconst query = $('Execute Workflow Trigger').first().json.query || '';\nconst modeOverride = $('Execute Workflow Trigger').first().json.mode_override || null;\nif (modeOverride && validModes.includes(modeOverride)) {\n  parsed.mode = modeOverride;\n} else if (query.match(/\\[deep\\]/i)) {\n  parsed.mode = 'deep';\n} else if (query.match(/\\[quick\\]/i)) {\n  parsed.mode = 'quick';\n}\n\nreturn [{\n  json: {\n    search_plan: parsed,\n    mode: parsed.mode,\n    query: query,\n    language: $('Execute Workflow Trigger').first().json.language || 'de'\n  }\n}];"
+      },
+      "id": "parse-codex-003",
+      "name": "Parse Codex Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\n\nconst query = $input.first().json.query || $input.first().json.search_plan?.sub_questions?.[0]?.question || 'test';\n\ntry {\n  const result = execSync(`python3 /home/clawd/.openclaw/workspace/scripts/kb-search.py \"${query.replace(/\"/g, '\\\\\"')}\" --limit 3`, {\n    encoding: 'utf-8',\n    timeout: 30000,\n    env: { ...process.env, PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:' + (process.env.PATH || '') },\n    cwd: '/home/clawd'\n  });\n  \n  return [{ json: { stdout: result, exitCode: 0, query: query } }];\n} catch (error) {\n  // KB-Search Fehler ist kein Blocker\n  return [{ json: { stdout: error.stdout || '', stderr: error.stderr || error.message, exitCode: error.status || 1, query: query } }];\n}",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "kb-check-004",
+      "name": "KB Existence Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine search_plan + KB results + mode into final output\nconst planData = $('Parse Codex Output').first().json;\nconst kbRaw = $input.first().json.stdout || '';\nconst kbExitCode = $input.first().json.exitCode;\n\n// KB-Output parsen\nlet kbExisting = false;\nlet kbHitsCount = 0;\nlet kbHits = [];\n\ntry {\n  // kb-search.py gibt JSON aus\n  const kbParsed = JSON.parse(kbRaw.trim());\n  if (Array.isArray(kbParsed)) {\n    kbHits = kbParsed;\n    kbHitsCount = kbParsed.length;\n    kbExisting = kbHitsCount > 0;\n  } else if (kbParsed.results) {\n    kbHits = kbParsed.results;\n    kbHitsCount = kbParsed.results.length;\n    kbExisting = kbHitsCount > 0;\n  }\n} catch (e) {\n  // KB-Search fehlgeschlagen oder kein JSON \u2014 kein Blocker\n  kbExisting = false;\n  kbHitsCount = 0;\n}\n\nreturn [{\n  json: {\n    search_plan: planData.search_plan,\n    mode: planData.mode,\n    query: planData.query,\n    language: planData.language,\n    kb_existing: kbExisting,\n    kb_hits_count: kbHitsCount,\n    kb_hits: kbHits\n  }\n}];"
+      },
+      "id": "combine-output-005",
+      "name": "Combine Plan Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Gemini Query Decomposition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Codex Output": {
+      "main": [
+        [
+          {
+            "node": "KB Existence Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KB Existence Check": {
+      "main": [
+        [
+          {
+            "node": "Combine Plan Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Query Decomposition": {
+      "main": [
+        [
+          {
+            "node": "Parse Codex Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2026-04-06T00:00:00.000Z",
+  "versionId": "1",
+  "id": "phase0"
+}

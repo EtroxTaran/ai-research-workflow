@@ -1,0 +1,201 @@
+{
+  "name": "Research Phase 4 \u2014 Report Synthesis",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-phase4",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Phase 4: Prepare Synthesis Input\n// Kompiliert Sources und Claims in strukturierten Prompt-Kontext\n\nconst input = $input.first().json;\nconst sources = input.sources || [];\nconst claims = input.claims || [];\nconst searchPlan = input.search_plan || {};\nconst runId = input.run_id || 'unknown';\nconst mode = input.mode || 'standard';\nconst language = input.language || 'de';\n\n// --- Sources nach Plattform gruppieren ---\nconst grouped = {};\nfor (const src of sources) {\n  const platform = src.origin || src.source_type || 'unknown';\n  if (!grouped[platform]) grouped[platform] = [];\n  grouped[platform].push(src);\n}\n\nlet contextParts = [];\n\n// Header mit Metadaten\ncontextParts.push(`Run ID: ${runId}`);\ncontextParts.push(`Mode: ${mode}`);\ncontextParts.push(`Query: ${searchPlan.query || input.query || 'N/A'}`);\nif (searchPlan.sub_questions && searchPlan.sub_questions.length > 0) {\n  contextParts.push(`\\nSub-Fragen:\\n${searchPlan.sub_questions.map((q, i) => `  ${i + 1}. ${q}`).join('\\n')}`);\n}\n\n// Sources nach Plattform\ncontextParts.push('\\n--- QUELLEN ---');\nfor (const [platform, platformSources] of Object.entries(grouped)) {\n  contextParts.push(`\\n[${platform.toUpperCase()}] (${platformSources.length} Ergebnisse)`);\n  for (const src of platformSources) {\n    const tier = src.tier ? ` [${src.tier}]` : '';\n    const score = src.relevance_score ? ` (relevance: ${src.relevance_score})` : '';\n    contextParts.push(`  - ${src.title || 'Untitled'}${tier}${score}`);\n    contextParts.push(`    URL: ${src.url || 'N/A'}`);\n    if (src.snippet) {\n      // Snippet kuerzen auf 500 Zeichen\n      const snippet = src.snippet.length > 500 ? src.snippet.substring(0, 500) + '...' : src.snippet;\n      contextParts.push(`    Inhalt: ${snippet}`);\n    }\n  }\n}\n\n// Claims mit Verifikationsstatus\nif (claims.length > 0) {\n  contextParts.push('\\n--- CLAIMS ---');\n  for (const claim of claims) {\n    const status = claim.verification_status || claim.status || 'unverified';\n    const confidence = claim.confidence ? ` (confidence: ${claim.confidence})` : '';\n    contextParts.push(`  - [${status.toUpperCase()}]${confidence} ${claim.claim || claim.text || JSON.stringify(claim)}`);\n    if (claim.counter_evidence) {\n      contextParts.push(`    Gegenrecherche: ${claim.counter_evidence}`);\n    }\n    if (claim.supporting_sources && claim.supporting_sources.length > 0) {\n      contextParts.push(`    Belegt durch: ${claim.supporting_sources.join(', ')}`);\n    }\n  }\n}\n\n// Gesamten Kontext zusammensetzen\nlet synthesisInput = contextParts.join('\\n');\n\n// Kontext-Limit: 80.000 Zeichen fuer CLI-Timeout-Schutz\nconst MAX_CONTEXT_LENGTH = 80000;\nif (synthesisInput.length > MAX_CONTEXT_LENGTH) {\n  synthesisInput = synthesisInput.substring(0, MAX_CONTEXT_LENGTH) + '\\n\\n[... Kontext gekuerzt wegen Laengenlimit ...]';\n}\n\nreturn [{\n  json: {\n    synthesis_input: synthesisInput,\n    mode: mode,\n    language: language,\n    run_id: runId,\n    source_count: sources.length,\n    claim_count: claims.length,\n    platform_count: Object.keys(grouped).length,\n    platforms: Object.keys(grouped)\n  }\n}];"
+      },
+      "id": "prepare-synthesis",
+      "name": "Prepare Synthesis Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "mode-deep-check",
+              "leftValue": "={{ $json.mode }}",
+              "rightValue": "deep",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "mode-check",
+      "name": "Mode Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        600,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\n\ntry {\n  const result = execSync(\"={{ (() => {\\n  const input = $json.synthesis_input.replace(/'/g, \\\"'\\\\\\\\''\\\")\\n  const lang = $json.language || 'de';\\n  return `gemini -p 'Erstelle einen Research-Report nach Template v3.\\\\n\\\\nTemplate v3 Struktur:\\\\n1. Executive Verdict (2-3 Saetze)\\\\n2. Entscheidungstabelle (wenn applicable)\\\\n3. Detailanalyse\\\\n4. Quellen-Uebersicht\\\\n5. Offene Risiken\\\\n6. Naechste Schritte\\\\n\\\\nSprache: ${lang}\\\\n\\\\nRecherche-Daten:\\\\n${input}' --sandbox`;\\n})() }}\", {\n    encoding: 'utf-8',\n    timeout: 120000,\n    env: { ...process.env, PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:' + process.env.PATH },\n    cwd: '/home/clawd'\n  });\n  \n  return [{ json: { stdout: result, exitCode: 0 } }];\n} catch (error) {\n  return [{ json: { stdout: error.stdout || '', stderr: error.stderr || error.message, exitCode: error.status || 1 } }];\n}",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "gemini-cli",
+      "name": "Gemini CLI Synthesis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        450
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { execSync } = require('child_process');\n\ntry {\n  const result = execSync(\"={{ (() => {\\n  const input = $json.synthesis_input.replace(/'/g, \\\"'\\\\\\\\''\\\")\\n  const lang = $json.language || 'de';\\n  return `claude -p 'Erstelle einen umfassenden Research-Report nach Template v3.\\\\n\\\\nTemplate v3 Struktur:\\\\n1. Executive Verdict (2-3 Saetze, klare Empfehlung)\\\\n2. PRISMA Protocol (Suchstrategie, Ein-/Ausschlusskriterien)\\\\n3. Entscheidungstabelle\\\\n4. Detailanalyse (pro Sub-Frage)\\\\n5. Gegenrecherche & Widersprueche\\\\n6. Verification Table\\\\n7. Quellen-Uebersicht (mit Tier-Level)\\\\n8. Offene Risiken\\\\n9. Naechste Schritte\\\\n\\\\nSprache: ${lang}\\\\n\\\\nRecherche-Daten:\\\\n${input}' --model opus`;\\n})() }}\", {\n    encoding: 'utf-8',\n    timeout: 120000,\n    env: { ...process.env, PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:' + process.env.PATH },\n    cwd: '/home/clawd'\n  });\n  \n  return [{ json: { stdout: result, exitCode: 0 } }];\n} catch (error) {\n  return [{ json: { stdout: error.stdout || '', stderr: error.stderr || error.message, exitCode: error.status || 1 } }];\n}",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "claude-cli",
+      "name": "Claude CLI Opus Synthesis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "empty"
+      },
+      "id": "merge-cli-output",
+      "name": "Merge CLI Output",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Post-Process: Report extrahieren, Qualitaet bewerten\n\nconst cliOutput = $input.first().json;\nconst stdout = cliOutput.stdout || '';\nconst exitCode = cliOutput.exitCode;\n\n// Metadaten vom vorherigen Code-Node ueber die Workflow-Daten holen\nconst prepNode = $('Prepare Synthesis Input').first().json;\nconst sourceCount = prepNode.source_count || 0;\nconst claimCount = prepNode.claim_count || 0;\nconst platformCount = prepNode.platform_count || 0;\nconst platforms = prepNode.platforms || [];\nconst mode = prepNode.mode || 'standard';\nconst runId = prepNode.run_id || 'unknown';\n\n// --- Report Markdown extrahieren ---\nlet reportMarkdown = stdout.trim();\n\n// Falls CLI Wrapper-Output hat, Markdown-Block extrahieren\nconst mdMatch = reportMarkdown.match(/```markdown\\n?([\\s\\S]*?)\\n?```/);\nif (mdMatch) {\n  reportMarkdown = mdMatch[1].trim();\n}\n\n// --- Titel generieren ---\nlet title = 'Research Report';\n// Ersten H1 oder H2 Header als Titel verwenden\nconst titleMatch = reportMarkdown.match(/^#{1,2}\\s+(.+)$/m);\nif (titleMatch) {\n  title = titleMatch[1].trim();\n}\n\n// --- Quality Score berechnen (0-100) ---\nlet qualityScore = 0;\n\n// Faktor 1: Quellenanzahl (max 30 Punkte)\nqualityScore += Math.min(sourceCount * 3, 30);\n\n// Faktor 2: Claim-Anzahl (max 20 Punkte)\nqualityScore += Math.min(claimCount * 4, 20);\n\n// Faktor 3: Plattform-Diversitaet (max 25 Punkte)\nqualityScore += Math.min(platformCount * 5, 25);\n\n// Faktor 4: Report-Laenge als Proxy fuer Tiefe (max 15 Punkte)\nconst wordCount = reportMarkdown.split(/\\s+/).length;\nqualityScore += Math.min(Math.floor(wordCount / 100), 15);\n\n// Faktor 5: CLI-Exit-Code (10 Punkte wenn erfolgreich)\nif (exitCode === 0) {\n  qualityScore += 10;\n}\n\nqualityScore = Math.min(qualityScore, 100);\n\n// --- Confidence Score (0.0 - 1.0) ---\nlet confidenceScore = 0.0;\n\n// Basis-Confidence aus Quellen\nif (sourceCount >= 10) confidenceScore += 0.3;\nelse if (sourceCount >= 5) confidenceScore += 0.2;\nelse if (sourceCount >= 1) confidenceScore += 0.1;\n\n// Plattform-Diversitaet\nif (platformCount >= 4) confidenceScore += 0.25;\nelse if (platformCount >= 2) confidenceScore += 0.15;\nelse if (platformCount >= 1) confidenceScore += 0.05;\n\n// Claims verifiziert\nif (claimCount >= 5) confidenceScore += 0.25;\nelse if (claimCount >= 2) confidenceScore += 0.15;\nelse if (claimCount >= 1) confidenceScore += 0.1;\n\n// Mode-Bonus\nif (mode === 'deep') confidenceScore += 0.15;\nelse if (mode === 'standard') confidenceScore += 0.1;\nelse confidenceScore += 0.05;\n\nconfidenceScore = Math.min(confidenceScore, 1.0);\nconfidenceScore = parseFloat(confidenceScore.toFixed(2));\n\n// --- Verdict extrahieren ---\nlet verdict = '';\n// Versuche den Executive Verdict Abschnitt zu finden\nconst verdictMatch = reportMarkdown.match(/(?:Executive Verdict|Fazit|Verdict|Zusammenfassung)[:\\s]*\\n([\\s\\S]*?)(?:\\n#{1,3}\\s|\\n---|\\.\\n\\n)/i);\nif (verdictMatch) {\n  verdict = verdictMatch[1].trim().substring(0, 500);\n} else {\n  // Fallback: Erste 2 Saetze\n  const sentences = reportMarkdown.replace(/^#.+\\n/gm, '').trim().split(/\\.\\s+/);\n  verdict = sentences.slice(0, 2).join('. ').trim();\n  if (verdict && !verdict.endsWith('.')) verdict += '.';\n}\n\n// --- Template Compliance Check ---\nconst templateSections = mode === 'deep'\n  ? ['Executive Verdict', 'PRISMA', 'Entscheidungstabelle', 'Detailanalyse', 'Gegenrecherche', 'Verification', 'Quellen', 'Risiken', 'Schritte']\n  : ['Executive Verdict', 'Entscheidungstabelle', 'Detailanalyse', 'Quellen', 'Risiken', 'Schritte'];\n\nconst foundSections = templateSections.filter(section =>\n  reportMarkdown.toLowerCase().includes(section.toLowerCase())\n);\nconst templateCompliant = foundSections.length >= Math.ceil(templateSections.length * 0.6);\n\nreturn [{\n  json: {\n    report_markdown: reportMarkdown,\n    title: title,\n    quality_score: qualityScore,\n    confidence_score: confidenceScore,\n    verdict: verdict,\n    template_compliant: templateCompliant,\n    run_id: runId,\n    mode: mode,\n    _meta: {\n      source_count: sourceCount,\n      claim_count: claimCount,\n      platform_count: platformCount,\n      platforms: platforms,\n      word_count: wordCount,\n      sections_found: foundSections,\n      sections_expected: templateSections,\n      cli_exit_code: exitCode\n    }\n  }\n}];"
+      },
+      "id": "post-process",
+      "name": "Post-Process Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Synthesis Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Synthesis Input": {
+      "main": [
+        [
+          {
+            "node": "Mode Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mode Check": {
+      "main": [
+        [
+          {
+            "node": "Claude CLI Opus Synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gemini CLI Synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude CLI Opus Synthesis": {
+      "main": [
+        [
+          {
+            "node": "Merge CLI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini CLI Synthesis": {
+      "main": [
+        [
+          {
+            "node": "Merge CLI Output",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge CLI Output": {
+      "main": [
+        [
+          {
+            "node": "Post-Process Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2026-04-06T00:00:00.000Z",
+  "versionId": "1",
+  "id": "phase4"
+}

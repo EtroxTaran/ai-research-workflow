@@ -1,0 +1,209 @@
+[
+  {
+    "updatedAt": "2026-04-11T16:02:12.000Z",
+    "createdAt": "2026-04-08T16:30:33.537Z",
+    "id": "yRsHld8Yfi7I4WzA",
+    "name": "🔬 · ⚙️ Research Continuous Monitor",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "id": "schedule-trigger",
+        "name": "Schedule Trigger",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1,
+        "position": [
+          0,
+          300
+        ],
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "0 */6 * * *"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "manual-trigger",
+        "name": "Manual Trigger",
+        "type": "n8n-nodes-base.manualTrigger",
+        "typeVersion": 1,
+        "position": [
+          0,
+          500
+        ],
+        "parameters": {}
+      },
+      {
+        "id": "load-monitored-topics",
+        "name": "Load Monitored Topics",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          250,
+          400
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "http://127.0.0.1:18000/sql",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "surreal-ns",
+                "value": "research"
+              },
+              {
+                "name": "surreal-db",
+                "value": "workflow"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Accept",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "contentType": "raw",
+          "rawContentType": "text/plain",
+          "body": "SELECT * FROM research_run WHERE mode = 'continuous_monitor' AND status = 'completed' ORDER BY started_at DESC;",
+          "options": {}
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "ICgLzc5AfiFid0By",
+            "name": "surrealdb-basic-auth"
+          }
+        }
+      },
+      {
+        "id": "check-delta",
+        "name": "Check for New Findings",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          500,
+          400
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "const { execSync } = require('child_process');\n\nconst data = $input.first().json;\nconst previousRuns = (data.body || []).slice(0, 5);\n\n\nconst topics = previousRuns.map(r => ({ query: r.query, lastRun: r.started_at, runId: r.run_id }));\nconst results = [];\n\nfor (const topic of topics.slice(0, 3)) {\n  try {\n    const encodedQuery = encodeURIComponent(topic.query);\n    const braveKey = $env.BRAVE_SEARCH_API_KEY || $env.BRAVE_API_KEY || '';\n    if (!braveKey) continue;\n\n    const searchResult = execSync(`curl -s -H \"X-Subscription-Token: ${braveKey}\" \"https://api.search.brave.com/res/v1/web/search?q=${encodedQuery}&count=5&freshness=pd\"`, {\n      encoding: 'utf-8', timeout: 15000\n    });\n    const braveData = JSON.parse(searchResult);\n    const newResults = (braveData.web && braveData.web.results) || [];\n\n    if (newResults.length > 0) {\n      results.push({\n        query: topic.query,\n        new_results: newResults.length,\n        top_result: newResults[0].title,\n        novelty_score: newResults.length >= 3 ? 0.8 : 0.5\n      });\n    }\n  } catch(e) {}\n}\n\nreturn [{ json: { monitored_topics: topics.length, delta_results: results, has_updates: results.filter(r => r.novelty_score >= 0.7).length > 0 } }];"
+        }
+      },
+      {
+        "id": "notify-if-updates",
+        "name": "Notify if Significant Updates",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          750,
+          400
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "const { execSync } = require('child_process');\n\nconst data = $input.first().json;\nif (!data.has_updates) return [{ json: { notified: false } }];\n\n\nconst significant = data.delta_results.filter(r => r.novelty_score >= 0.7);\nlet message = '\\ud83d\\udd14 Monitoring Update\\n\\n';\nfor (const update of significant) {\n  message += `*${update.query}*\\n${update.new_results} neue Ergebnisse\\nTop: ${update.top_result}\\n\\n`;\n}\nmessage += 'Tipp: Deep-Recherche starten fuer Details.';\n\ntry {\n  const body = JSON.stringify({ chat_id: Number($env.TELEGRAM_CHAT_ID || ''), text: message, parse_mode: 'Markdown' });\n  execSync(`curl -s -X POST -H \"Content-Type: application/json\" -d '${body.replace(/'/g, \"'\\\\''\")}'  \"https://api.telegram.org/bot${$env.RESEARCH_BOT_TOKEN || ''}/sendMessage\"`, {\n    encoding: 'utf-8', timeout: 10000\n  });\n} catch(e) {}\n\nreturn [{ json: { notified: true, updates: significant.length } }];"
+        }
+      }
+    ],
+    "connections": {
+      "Schedule Trigger": {
+        "main": [
+          [
+            {
+              "node": "Load Monitored Topics",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Manual Trigger": {
+        "main": [
+          [
+            {
+              "node": "Load Monitored Topics",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Load Monitored Topics": {
+        "main": [
+          [
+            {
+              "node": "Check for New Findings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check for New Findings": {
+        "main": [
+          [
+            {
+              "node": "Notify if Significant Updates",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": {
+      "node:Schedule Trigger": {
+        "recurrenceRules": []
+      }
+    },
+    "meta": null,
+    "pinData": null,
+    "versionId": "d6490da7-d3b0-41af-a8d5-05671b1d68b1",
+    "activeVersionId": "d6490da7-d3b0-41af-a8d5-05671b1d68b1",
+    "versionCounter": 34,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "research"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-08T16:30:33.539Z",
+        "createdAt": "2026-04-08T16:30:33.539Z",
+        "role": "workflow:owner",
+        "workflowId": "yRsHld8Yfi7I4WzA",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

@@ -1,0 +1,195 @@
+{
+  "name": "🔬 · 🤖 Research Weekly Digest",
+  "tags": [
+    {
+      "name": "research"
+    },
+    {
+      "name": "ai-llm"
+    }
+  ],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        500
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "load-channels",
+      "name": "Load Digest Channels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        250,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:18000/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "surreal-ns",
+              "value": "research"
+            },
+            {
+              "name": "surreal-db",
+              "value": "workflow"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "SELECT * FROM digest_channel WHERE active = true;",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ICgLzc5AfiFid0By",
+          "name": "surrealdb-basic-auth"
+        }
+      }
+    },
+    {
+      "id": "load-week-data",
+      "name": "Load Week Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst minifluxUrl = $env.MINIFLUX_URL || 'http://localhost:8070';\nconst minifluxApiKey = $env.MINIFLUX_API_KEY || '';\n\nlet recentEntries = [];\nif (minifluxApiKey) {\n  try {\n    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();\n    const result = execSync(`curl -s -H \"X-Auth-Token: ${minifluxApiKey}\" \"${minifluxUrl}/v1/entries?limit=50&order=published_at&direction=desc&status=unread&after=${encodeURIComponent(weekAgo)}\"`, {\n      encoding: 'utf-8', timeout: 15000\n    });\n    const data = JSON.parse(result);\n    if (data.entries) recentEntries = data.entries.map(e => ({ title: e.title, url: e.url, feed: e.feed ? e.feed.title : '', published: e.published_at }));\n  } catch(e) {}\n}\n\nlet recentRuns = [];\ntry {\n  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();\n  const sql = `SELECT query, mode, quality_score, verdict, source_count, started_at FROM research_run WHERE started_at > '${weekAgo}' AND status = 'completed' ORDER BY started_at DESC LIMIT 20;`;\n  const result = execSync(`curl -s -X POST -H \"surreal-ns: research\" -H \"surreal-db: workflow\" -H \"Content-Type: application/json\" -H \"Accept: application/json\" -u \"${$env.SURREAL_USER || 'root'}:${$env.SURREAL_PASS || 'root'}\" -d '${sql}' \"http://127.0.0.1:18000/sql\"`, {\n    encoding: 'utf-8', timeout: 10000\n  });\n  const data = JSON.parse(result);\n  if (data[0] && data[0].result) recentRuns = data[0].result;\n} catch(e) {}\n\nreturn [{ json: { rss_entries: recentEntries, recent_runs: recentRuns, entry_count: recentEntries.length, run_count: recentRuns.length } }];"
+      }
+    },
+    {
+      "id": "generate-digest",
+      "name": "Generate Digest Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\nconst fs = require('fs');\n\nconst data = $input.first().json;\n\n\nconst cliEnv = { HOME: '/home/clawd', PATH: '/home/clawd/.local/bin:/home/clawd/.npm-global/bin:/usr/local/bin:/usr/bin:/bin', GEMINI_API_KEY: $env.GEMINI_API_KEY || $env.GOOGLE_GEMINI_API_KEY || '' };\n\nlet context = `Weekly Digest Context:\\n\\nRSS Entries (${data.entry_count}):\\n`;\nfor (const entry of (data.rss_entries || []).slice(0, 20)) {\n  context += `- ${entry.title} (${entry.feed}) — ${entry.url}\\n`;\n}\n\ncontext += `\\nRecent Research Runs (${data.run_count}):\\n`;\nfor (const run of (data.recent_runs || []).slice(0, 10)) {\n  context += `- ${run.query} (${run.mode}, Score: ${run.quality_score}, Verdict: ${run.verdict || 'N/A'})\\n`;\n}\n\nconst prompt = `Du bist ein Weekly Digest Writer. Erstelle eine Zusammenfassung der wichtigsten Entwicklungen der Woche basierend auf diesen Daten.\\n\\n${context}\\n\\nFormat:\\n# Weekly Digest - [Datum]\\n## Top Stories\\n[3-5 wichtigste Nachrichten]\\n## Research Highlights\\n[Zusammenfassung der Research-Runs]\\n## Trending Topics\\n[Erkannte Trends]\\n## Quellen\\n[Nummerierte Liste]`;\n\nconst tmpFile = '/tmp/digest_' + Date.now() + '.txt';\nfs.writeFileSync(tmpFile, prompt);\n\nlet digest = '';\ntry {\n  digest = execSync(`cat \"${tmpFile}\" | gemini -p \"Generate the weekly digest in German.\"`, {\n    encoding: 'utf-8', timeout: 120000, env: cliEnv, maxBuffer: 5 * 1024 * 1024\n  });\n} catch (err) {\n  digest = `# Weekly Digest\\n\\nFehler bei der Erstellung: ${err.message || 'Timeout'}\\n\\n## RSS Entries: ${data.entry_count}\\n## Research Runs: ${data.run_count}`;\n}\n\ntry { fs.unlinkSync(tmpFile); } catch(e) {}\n\nreturn [{ json: { digest: digest.trim(), entry_count: data.entry_count, run_count: data.run_count } }];"
+      }
+    },
+    {
+      "id": "send-digest",
+      "name": "Telegram Send Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst data = $input.first().json;\nlet message = `\\ud83d\\udcf0 Weekly Research Digest\\n\\n${data.digest || 'Kein Digest generiert.'}\\n\\nRSS: ${data.entry_count} entries | Runs: ${data.run_count} completed`;\n\nif (message.length > 4096) message = message.substring(0, 4090) + '\\n(...)';\n\nmessage = message.replace(/```[\\s\\S]*?```/g, '(code)').replace(/`/g, \"'\");\nmessage = message.replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, '$1').replace(/\\[([^\\]]{1,100})\\]/g, '($1)').replace(/[\\[\\]]/g, '');\nconst countChar = (str, ch) => str.split(ch).length - 1;\nif (countChar(message, '*') % 2 !== 0) message = message.replace(/\\*/g, '');\nif (countChar(message, '_') % 2 !== 0) message = message.replace(/_/g, ' ');\n\ntry {\n  const body = JSON.stringify({ chat_id: Number($env.TELEGRAM_CHAT_ID || ''), text: message, parse_mode: 'Markdown' });\n  execSync(`curl -s -X POST -H \"Content-Type: application/json\" -d '${body.replace(/'/g, \"'\\\\''\")}'  \"https://api.telegram.org/bot${$env.RESEARCH_BOT_TOKEN || ''}/sendMessage\"`, {\n    encoding: 'utf-8', timeout: 10000\n  });\n} catch(e) {}\n\nreturn [{ json: { sent: true } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Digest Channels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Digest Channels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Digest Channels": {
+      "main": [
+        [
+          {
+            "node": "Load Week Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Week Data": {
+      "main": [
+        [
+          {
+            "node": "Generate Digest Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Digest Summary": {
+      "main": [
+        [
+          {
+            "node": "Telegram Send Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "id": "72CMlkiGvzcLQ5Yv"
+}

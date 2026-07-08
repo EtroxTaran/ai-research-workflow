@@ -1,0 +1,297 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:52.031Z",
+    "id": "b23HHqMeMu4ZP1jz",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Product Research",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "product-research",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "hive-product-research-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "product-research"
+      },
+      {
+        "parameters": {
+          "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst projectId = body.projectId || 'unknown';\nconst productIdea = body.productIdea || '';\nconst runId = body.runId || `research-${Date.now()}`;\n\nif (!productIdea) {\n  throw new Error('productIdea is required in the request body');\n}\n\nconst words = productIdea.toLowerCase().split(/\\s+/);\nconst stopWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 'for', 'with', 'that', 'this', 'to', 'of', 'in', 'on', 'at', 'by']);\nconst keywords = words.filter(w => w.length > 2 && !stopWords.has(w));\n\nconst domain = keywords.slice(0, 3).join(' ');\n\nconst searchQueries = [\n  `${domain} market analysis competitors`,\n  `${domain} user pain points jobs to be done`,\n  `${domain} existing solutions comparison`,\n  `${domain} technology trends ${new Date().getFullYear()}`,\n  `${domain} pricing models SaaS`\n];\n\nconst targetAudience = {\n  primary: `Users who need ${domain}`,\n  painPoints: [\n    `Current solutions for ${domain} are too complex`,\n    `Existing tools lack integration capabilities`,\n    `High cost of current ${domain} solutions`\n  ],\n  jobsToBeDone: [\n    `Simplify ${domain} workflow`,\n    `Reduce time spent on ${domain} tasks`,\n    `Get better insights from ${domain} data`\n  ]\n};\n\nreturn [{\n  json: {\n    projectId,\n    productIdea,\n    runId,\n    keywords,\n    domain,\n    searchQueries,\n    targetAudience\n  }\n}];"
+        },
+        "id": "hive-product-research-parse",
+        "name": "Parse Research Query",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $input.first().json;\nconst domain = input.domain;\nconst productIdea = input.productIdea;\nconst audience = input.targetAudience;\n\nconst options = [\n  {\n    id: 'option-a',\n    name: `${domain} \u2014 Focused MVP`,\n    approach: 'Minimal viable product targeting the core pain point',\n    description: `A lean solution focused on the single highest-value job-to-be-done: ${audience.jobsToBeDone[0]}. Ship fast, learn fast.`,\n    targetAudience: audience.primary,\n    monetization: 'Freemium with usage-based pricing',\n    timeToMarket: '4-6 weeks',\n    pros: [\n      'Fast time to market',\n      'Low initial investment',\n      'Quick user feedback loop',\n      'Easy to pivot based on learnings'\n    ],\n    cons: [\n      'Limited feature set may not attract power users',\n      'Risk of being outcompeted on features',\n      'May need significant rework to scale'\n    ],\n    riskLevel: 'low',\n    estimatedEffort: 'S-M'\n  },\n  {\n    id: 'option-b',\n    name: `${domain} \u2014 Platform Play`,\n    approach: 'Full-featured platform with extensibility',\n    description: `A comprehensive platform addressing all identified pain points: ${audience.painPoints.join('; ')}. Includes API for third-party integrations.`,\n    targetAudience: `${audience.primary} and developers building on top`,\n    monetization: 'Tiered subscription (Free / Pro / Enterprise)',\n    timeToMarket: '10-14 weeks',\n    pros: [\n      'Comprehensive solution creates strong moat',\n      'API/extensibility attracts developer ecosystem',\n      'Multiple revenue streams',\n      'Scalable architecture from day one'\n    ],\n    cons: [\n      'Longer time to market',\n      'Higher initial investment',\n      'More complex to maintain',\n      'Risk of over-engineering before product-market fit'\n    ],\n    riskLevel: 'medium',\n    estimatedEffort: 'L-XL'\n  },\n  {\n    id: 'option-c',\n    name: `${domain} \u2014 Integration-First`,\n    approach: 'Plugin/integration for existing popular platforms',\n    description: `Instead of building standalone, integrate into tools users already use. Solve ${audience.jobsToBeDone[1]} within their existing workflow.`,\n    targetAudience: `${audience.primary} who already use established platforms`,\n    monetization: 'Per-seat license or marketplace listing',\n    timeToMarket: '6-8 weeks',\n    pros: [\n      'Leverages existing user base of host platform',\n      'Lower customer acquisition cost',\n      'Users stay in familiar environment',\n      'Reduced infrastructure costs'\n    ],\n    cons: [\n      'Dependent on host platform policies',\n      'Limited by host platform capabilities',\n      'Revenue share with marketplace',\n      'Less brand visibility'\n    ],\n    riskLevel: 'medium',\n    estimatedEffort: 'M'\n  }\n];\n\nconst recommendation = {\n  preferred: 'option-a',\n  rationale: 'Start with focused MVP to validate product-market fit before committing to larger investments. Can evolve toward Option B or C based on user feedback.',\n  nextSteps: [\n    'Validate core assumption with 5 user interviews',\n    'Build clickable prototype for Option A',\n    'Define success metrics (activation, retention, NPS)',\n    'Set go/no-go criteria for 4-week checkpoint'\n  ]\n};\n\nreturn [{\n  json: {\n    ...input,\n    options,\n    recommendation\n  }\n}];"
+        },
+        "id": "hive-product-research-options",
+        "name": "Generate Options",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          520,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $input.first().json;\nconst selectedOption = input.options.find(o => o.id === input.recommendation.preferred) || input.options[0];\n\nconst requirements = {\n  functional: [\n    {\n      id: 'FR-001',\n      title: `Core ${input.domain} functionality`,\n      priority: 'must-have',\n      description: `Implement the primary job-to-be-done: ${input.targetAudience.jobsToBeDone[0]}`,\n      acceptanceCriteria: [\n        'User can complete core workflow end-to-end',\n        'Response time < 2 seconds for primary actions',\n        'Works on desktop and mobile viewports'\n      ]\n    },\n    {\n      id: 'FR-002',\n      title: 'User onboarding flow',\n      priority: 'must-have',\n      description: 'First-time user experience that demonstrates value within 60 seconds',\n      acceptanceCriteria: [\n        'New user reaches \"aha moment\" within 3 steps',\n        'No mandatory signup required for initial exploration',\n        'Progress is saved when user creates account'\n      ]\n    },\n    {\n      id: 'FR-003',\n      title: 'Data export and portability',\n      priority: 'should-have',\n      description: 'Users can export their data in standard formats',\n      acceptanceCriteria: [\n        'Export to CSV and JSON supported',\n        'Export completes within 30 seconds for typical datasets',\n        'Exported data is complete and re-importable'\n      ]\n    }\n  ],\n  nonFunctional: [\n    { id: 'NFR-001', category: 'performance', requirement: 'Page load time < 3 seconds on 3G', priority: 'must-have' },\n    { id: 'NFR-002', category: 'security', requirement: 'OWASP Top 10 compliance', priority: 'must-have' },\n    { id: 'NFR-003', category: 'accessibility', requirement: 'WCAG 2.1 AA compliance', priority: 'must-have' },\n    { id: 'NFR-004', category: 'scalability', requirement: 'Handle 1000 concurrent users', priority: 'should-have' },\n    { id: 'NFR-005', category: 'availability', requirement: '99.5% uptime SLA', priority: 'should-have' }\n  ],\n  constraints: [\n    `Time to market: ${selectedOption.timeToMarket}`,\n    `Effort estimate: ${selectedOption.estimatedEffort}`,\n    `Risk level: ${selectedOption.riskLevel}`,\n    'Must comply with GDPR for EU users',\n    'Self-hostable option required for enterprise tier'\n  ]\n};\n\nconst researchSummary = {\n  projectId: input.projectId,\n  runId: input.runId,\n  productIdea: input.productIdea,\n  domain: input.domain,\n  targetAudience: input.targetAudience,\n  competitiveAnalysis: {\n    searchQueries: input.searchQueries,\n    note: 'Queries prepared for manual or automated competitive research'\n  },\n  options: input.options,\n  recommendation: input.recommendation,\n  requirements\n};\n\nreturn [{\n  json: researchSummary\n}];"
+        },
+        "id": "hive-product-research-requirements",
+        "name": "Structure Requirements",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          780,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "PATCH",
+          "url": "={{ $env.PAPERCLIP_API_URL || 'http://127.0.0.1:3102' }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues/{{ $('Webhook Trigger').first().json.body.ticketId || $json.runId }}",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ status: 'done', result: { productResearch: { domain: $json.domain, options: $json.options.map(o => ({ id: o.id, name: o.name, approach: o.approach, risk: o.riskLevel, effort: o.estimatedEffort })), recommendation: $json.recommendation, requirementCount: $json.requirements.functional.length + $json.requirements.nonFunctional.length, constraints: $json.requirements.constraints } } }) , \"research_run_id\": \"={{ $('Store Research run_id').first().json.research_run_id }}\" }",
+          "options": {
+            "timeout": 10000
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              }
+            ]
+          }
+        },
+        "id": "hive-product-research-post",
+        "name": "Post Results",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          1040,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Auto-converted from Set v3 (n8n 2.15.x SetV2 node crashes at SetV2.node.ts:352)\nreturn [{ json: {\n  \"workflow\": \"hive-product-research\",\n  \"endpoint\": \"product-research\",\n  \"kind\": \"structured_loop\",\n  \"status\": \"completed\",\n  \"receivedAt\": $now.toISO(),\n  \"timeoutMs\": 120000,\n  \"success\": true,\n  \"result\": JSON.stringify({ projectId: $('Structure Requirements').first().json.projectId, runId: $('Structure Requirements').first().json.runId, domain: $('Structure Requirements').first().json.domain, optionCount: $('Structure Requirements').first().json.options.length, recommendedOption: $('Structure Requirements').first().json.recommendation.preferred, requirementCount: $('Structure Requirements').first().json.requirements.functional.length + $('Structure Requirements').first().json.requirements.nonFunctional.length })\n} }];"
+        },
+        "id": "hive-product-research-set",
+        "name": "Build Backbone Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ success: $json.success, workflow: $json.workflow, kind: $json.kind, status: $json.status, receivedAt: $json.receivedAt, result: typeof $json.result === 'string' ? JSON.parse($json.result) : $json.result }) }}",
+          "options": {}
+        },
+        "id": "hive-product-research-response",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1560,
+          0
+        ]
+      },
+      {
+        "id": "hive-research-trigger",
+        "name": "Trigger Research Pipeline",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [
+          1080,
+          -150
+        ],
+        "parameters": {
+          "url": "http://localhost:5678/webhook/research-start",
+          "method": "POST",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ query: $('Structure Requirements').first().json.searchQueries ? $('Structure Requirements').first().json.searchQueries.join('. ') : $('Parse Research Query').first().json.productIdea, mode: 'standard', domain_hint: 'product_comparison', trigger_source: 'hive', run_id: 'hive_' + $('Webhook Trigger').first().json.body.projectId + '_' + Date.now(), callback_webhook: 'http://localhost:5678/webhook/hive-research-done' }) }}"
+        }
+      },
+      {
+        "id": "hive-research-store-runid",
+        "name": "Store Research run_id",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1380,
+          -150
+        ],
+        "parameters": {
+          "jsCode": "// Auto-converted from Set v3 (n8n 2.15.x SetV2 node crashes at SetV2.node.ts:352)\nreturn [{ json: {\n  \"research_run_id\": $json.run_id || ('hive_research_' + Date.now())\n} }];"
+        }
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Parse Research Query",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Research Query": {
+        "main": [
+          [
+            {
+              "node": "Generate Options",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate Options": {
+        "main": [
+          [
+            {
+              "node": "Structure Requirements",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Structure Requirements": {
+        "main": [
+          [
+            {
+              "node": "Trigger Research Pipeline",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Post Results": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Backbone Response": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Trigger Research Pipeline": {
+        "main": [
+          [
+            {
+              "node": "Store Research run_id",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Store Research run_id": {
+        "main": [
+          [
+            {
+              "node": "Post Results",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "d153a490-3c78-4c94-84b9-8d7997b626b8",
+    "activeVersionId": "d153a490-3c78-4c94-84b9-8d7997b626b8",
+    "versionCounter": 52,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.032Z",
+        "createdAt": "2026-04-07T20:39:52.032Z",
+        "role": "workflow:owner",
+        "workflowId": "b23HHqMeMu4ZP1jz",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

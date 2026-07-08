@@ -1,0 +1,226 @@
+{
+  "name": "🔬 · ⚙️ Research Feedback Handler",
+  "tags": [
+    {
+      "name": "research"
+    }
+  ],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Telegram Callback Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "research-feedback",
+      "parameters": {
+        "path": "research-feedback",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "parse-callback",
+      "name": "Parse Callback Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first().json;\nconst body = input.body || {};\n\nconst callbackQuery = body.callback_query || {};\nconst data = callbackQuery.data || '';\nconst fromId = callbackQuery.from ? callbackQuery.from.id : null;\nconst messageId = callbackQuery.message ? callbackQuery.message.message_id : null;\n\nlet action = null;\nlet runId = null;\n\nif (data.startsWith('feedback_up_')) {\n  action = 'thumbs_up';\n  runId = data.replace('feedback_up_', '');\n} else if (data.startsWith('feedback_down_')) {\n  action = 'thumbs_down';\n  runId = data.replace('feedback_down_', '');\n} else if (data.startsWith('hitl_approve_')) {\n  action = 'approve';\n  runId = data.replace('hitl_approve_', '');\n} else if (data.startsWith('hitl_reject_')) {\n  action = 'reject';\n  runId = data.replace('hitl_reject_', '');\n}\n\nreturn [{ json: { action, runId, fromId, messageId, callbackQueryId: callbackQuery.id } }];"
+      }
+    },
+    {
+      "id": "update-rating",
+      "name": "SurrealDB Update Rating",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:18000/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "surreal-ns",
+              "value": "research"
+            },
+            {
+              "name": "surreal-db",
+              "value": "workflow"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "={{ (() => { const action = $json.action; const runId = $json.runId; if (action === 'thumbs_up' || action === 'thumbs_down') { return `UPDATE research_report SET user_rating='${action}' WHERE run_id = (SELECT id FROM research_run WHERE run_id = '${runId}' LIMIT 1)[0].id;`; } else if (action === 'approve') { return `UPDATE research_run SET status = 'completed' WHERE run_id = '${runId}';`; } else if (action === 'reject') { return `UPDATE research_run SET status = 'failed' WHERE run_id = '${runId}';`; } return '-- no action'; })() }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ICgLzc5AfiFid0By",
+          "name": "surrealdb-basic-auth"
+        }
+      }
+    },
+    {
+      "id": "reputation-feedback",
+      "name": "Reputation Feedback Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\nconst fs = require('fs');\n\nconst data = $input.first().json;\nconst action = $('Parse Callback Data').first().json.action;\nconst runId = $('Parse Callback Data').first().json.runId;\n\nif (action !== 'thumbs_up' && action !== 'thumbs_down') {\n  return [{ json: { reputation_sql: '-- no reputation update needed' } }];\n}\n\nconst increment = action === 'thumbs_up' ? 'correct_count' : 'incorrect_count';\n\nconst sql = `LET $sources = (SELECT source FROM used_source WHERE run = (SELECT id FROM research_run WHERE run_id = '${runId}' LIMIT 1)[0].id); FOR $src IN $sources { UPDATE $src.source SET ${increment} += 1, reputation_score = (correct_count + 1) / (correct_count + incorrect_count + 2); };`;\n\nreturn [{ json: { reputation_sql: sql } }];"
+      }
+    },
+    {
+      "id": "reputation-execute",
+      "name": "Reputation Execute",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:18000/sql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "surreal-ns",
+              "value": "research"
+            },
+            {
+              "name": "surreal-db",
+              "value": "workflow"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "={{ $json.reputation_sql }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "ICgLzc5AfiFid0By",
+          "name": "surrealdb-basic-auth"
+        }
+      }
+    },
+    {
+      "id": "answer-callback",
+      "name": "Answer Telegram Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\n\n\nconst callbackData = $('Parse Callback Data').first().json;\nconst actionTexts = { thumbs_up: 'Danke! Positives Feedback gespeichert.', thumbs_down: 'Danke! Feedback gespeichert. Quellen-Reputation angepasst.', approve: 'Report approved und delivered.', reject: 'Report rejected.' };\nconst text = actionTexts[callbackData.action] || 'Verarbeitet.';\n\ntry {\n  if (callbackData.callbackQueryId) {\n    const body = JSON.stringify({ callback_query_id: callbackData.callbackQueryId, text });\n    execSync(`curl -s -X POST -H \"Content-Type: application/json\" -d '${body.replace(/'/g, \"'\\\\''\")}'  \"https://api.telegram.org/bot${$env.RESEARCH_BOT_TOKEN || ''}/answerCallbackQuery\"`, {\n      encoding: 'utf-8', timeout: 5000\n    });\n  }\n} catch(e) {}\n\nreturn [{ json: { answered: true, action: callbackData.action } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Callback Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Callback Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Callback Data": {
+      "main": [
+        [
+          {
+            "node": "SurrealDB Update Rating",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SurrealDB Update Rating": {
+      "main": [
+        [
+          {
+            "node": "Reputation Feedback Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reputation Feedback Update": {
+      "main": [
+        [
+          {
+            "node": "Reputation Execute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reputation Execute": {
+      "main": [
+        [
+          {
+            "node": "Answer Telegram Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "id": "63h9DuPDCwuxAZZD"
+}

@@ -1,0 +1,347 @@
+[
+  {
+    "updatedAt": "2026-04-10T21:47:09.000Z",
+    "createdAt": "2026-04-07T20:39:52.004Z",
+    "id": "EKTLqWKi3w9RvDxF",
+    "name": "\ud83d\udc1d \u00b7 \u2699\ufe0f Hive - Correction Router",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "correction-route",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "hive-correction-route-webhook",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "correction-route"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": ""
+            },
+            "conditions": [
+              {
+                "id": "cycle-lt-3",
+                "leftValue": "={{ $json.body.cycleNumber }}",
+                "rightValue": 3,
+                "operator": {
+                  "type": "number",
+                  "operation": "lt"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "hive-correction-route-cycle-check",
+        "name": "Cycle Check",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          260,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ title: 'Correction: Review ' + $json.body.reviewTicketId + ' (Cycle ' + (($json.body.cycleNumber || 0) + 1) + ')', description: 'Correction required based on review feedback.\\n\\n**Verdict:** ' + ($json.body.verdict || 'needs-changes') + '\\n\\n**Correction Brief:**\\n' + ($json.body.correctionBrief || 'No details provided.'), assignee: $json.body.originalAgentType, status: 'todo', priority: 'high', labels: ['correction', 'review-feedback'], metadata: { issue_type: 'correction', reviewTicketId: $json.body.reviewTicketId, correctionBrief: $json.body.correctionBrief, cycleNumber: ($json.body.cycleNumber || 0) + 1, verdict: $json.body.verdict } }) }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "hive-correction-route-create",
+        "name": "Route Correction",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          520,
+          -120
+        ]
+      },
+      {
+        "parameters": {
+          "method": "PATCH",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId || $json.companyId }}/issues/{{ $('Webhook Trigger').first().json.body.reviewTicketId }}",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ metadata: { cycleNumber: ($('Webhook Trigger').first().json.body.cycleNumber || 0) + 1, lastCorrectionTicketId: $json.id || null, updatedAt: new Date().toISOString() } }) }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "hive-correction-route-update-cycle",
+        "name": "Update Cycle Counter",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          780,
+          -120
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $('Webhook Trigger').first().json.body;\nconst correctionTicket = $('Route Correction').first().json;\n\nreturn [{\n  json: {\n    action: 'correct',\n    ticketId: correctionTicket.id || null,\n    reviewTicketId: input.reviewTicketId,\n    originalAgentType: input.originalAgentType,\n    cycleNumber: (input.cycleNumber || 0) + 1\n  }\n}];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-correction-route-set-correct",
+        "name": "Set Correct Result",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1040,
+          -120
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.PAPERCLIP_API_URL }}/api/companies/{{ $env.PAPERCLIP_COMPANY_ID || $json.body.companyId }}/issues",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ title: 'Warning: Review cycle limit reached \u2014 ' + $json.body.reviewTicketId, description: 'Review ticket ' + $json.body.reviewTicketId + ' has reached the maximum correction cycle limit (3).\\n\\n**Verdict:** Force-accepted after ' + $json.body.cycleNumber + ' cycles.\\n**Original Agent:** ' + $json.body.originalAgentType + '\\n\\nAtlas should evaluate whether the deliverable quality is acceptable or escalation is needed.', assignee: 'atlas', status: 'todo', priority: 'critical', labels: ['warning', 'review-limit', 'escalation'], metadata: { reviewTicketId: $json.body.reviewTicketId, originalAgentType: $json.body.originalAgentType, cycleNumber: $json.body.cycleNumber, verdict: 'force-accepted', reason: 'max_cycles_reached' } }) }}",
+          "options": {},
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "={{ 'Bearer ' + $env.PAPERCLIP_API_KEY }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "id": "hive-correction-route-accept",
+        "name": "Accept With Warning",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          520,
+          120
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const input = $('Webhook Trigger').first().json.body;\nconst warningTicket = $input.first().json;\nconst action = input.verdict === 'escalate' ? 'escalate' : 'accept';\n\nreturn [{\n  json: {\n    action,\n    ticketId: warningTicket.id || null,\n    reviewTicketId: input.reviewTicketId,\n    originalAgentType: input.originalAgentType,\n    cycleNumber: input.cycleNumber || 0\n  }\n}];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-correction-route-set-accept",
+        "name": "Set Accept Result",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          780,
+          120
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const upstream = $input.first().json;\n\nreturn [{\n  json: {\n    workflow: 'hive-correction-route',\n    endpoint: 'correction-route',\n    kind: 'deterministic',\n    status: 'accepted',\n    receivedAt: new Date().toISOString(),\n    timeoutMs: 15000,\n    success: true,\n    result: {\n      action: upstream.action,\n      ticketId: upstream.ticketId,\n      reviewTicketId: upstream.reviewTicketId,\n      originalAgentType: upstream.originalAgentType,\n      cycleNumber: upstream.cycleNumber\n    }\n  }\n}];",
+          "mode": "runOnceForAllItems"
+        },
+        "id": "hive-correction-route-backbone",
+        "name": "Build Backbone Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json) }}",
+          "options": {}
+        },
+        "id": "hive-correction-route-response",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1560,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Cycle Check",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Cycle Check": {
+        "main": [
+          [
+            {
+              "node": "Route Correction",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Accept With Warning",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Route Correction": {
+        "main": [
+          [
+            {
+              "node": "Update Cycle Counter",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Update Cycle Counter": {
+        "main": [
+          [
+            {
+              "node": "Set Correct Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Set Correct Result": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Accept With Warning": {
+        "main": [
+          [
+            {
+              "node": "Set Accept Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Set Accept Result": {
+        "main": [
+          [
+            {
+              "node": "Build Backbone Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Backbone Response": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "bdfda047-ed2f-419c-9c10-b1a122fd523b",
+    "activeVersionId": "bdfda047-ed2f-419c-9c10-b1a122fd523b",
+    "versionCounter": 49,
+    "triggerCount": 1,
+    "tags": [
+      {
+        "name": "hive"
+      }
+    ],
+    "shared": [
+      {
+        "updatedAt": "2026-04-07T20:39:52.006Z",
+        "createdAt": "2026-04-07T20:39:52.006Z",
+        "role": "workflow:owner",
+        "workflowId": "EKTLqWKi3w9RvDxF",
+        "projectId": "8NMDFJItxjOGmGGk",
+        "project": {
+          "updatedAt": "2026-04-07T20:36:08.613Z",
+          "createdAt": "2026-03-07T22:14:48.979Z",
+          "id": "8NMDFJItxjOGmGGk",
+          "name": "Nico Rimmele <admin@example.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "creatorId": "8b1ccf42-d59f-45eb-9bf3-b9b33467e7b8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]
