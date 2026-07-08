@@ -568,7 +568,7 @@ Provider 3× hintereinander gefailed → 15min Cooldown → nur Fallback → Tel
 |---|---|---|
 | n8n | Docker `n8n-local`, `localhost:5678` (B-Link R2D2) | ✅ Läuft |
 | SurrealDB | `localhost:8001` | ✅ Läuft, v3.0.0 |
-| MiniFlux | `starfleet-rss.etrox.de` (Migration geplant) | ✅ Läuft |
+| MiniFlux | `example.com` (Migration geplant) | ✅ Läuft |
 | Nexus Portal | `~/projects/ai-portal/` | ✅ Walking Skeleton ready |
 
 ### Bestehende Scripts (wiederverwenden)
